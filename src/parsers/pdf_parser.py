@@ -1,4 +1,4 @@
-from operator import truediv
+
 from pathlib import Path
 import sys
 import re
@@ -310,6 +310,7 @@ def normalize_table(table):
 
 
 def parsing_tables(path: str, kinds, file_name: str):
+    files_list = []
     output_path = PARSING_DIR
     text_page_indexes = [i for (i, k, _) in kinds if k == "text"]
     if not text_page_indexes:
@@ -329,6 +330,7 @@ def parsing_tables(path: str, kinds, file_name: str):
                 if select_table(table):
                     output_path = output_path / f"{file_name}_table{i}.csv"
                     write_to_csv(output_path, table)
+                    files_list.append(f"{file_name}_table{i}.csv")
 
             if not tables:
                 continue
@@ -336,7 +338,7 @@ def parsing_tables(path: str, kinds, file_name: str):
             found_any = True
 
     if found_any:
-        return True
+        return files_list
 
     # Если таблицы не найдены стандартным способом, пытаемся установить границы таблицы
     first_page = text_page_indexes[0]
@@ -358,14 +360,16 @@ def parsing_tables(path: str, kinds, file_name: str):
             result = parse_table_block(page, lines, header, bounds, n_rows=None)
             raw_rows += result["raw_rows"]
         output_path = output_path / f"{file_name}.csv"
+        files_list.append(f"{file_name}.csv")
         write_to_csv(output_path, raw_rows)
-        return True
-    return False
+
+        return files_list
+    return None
 
 
 def write_to_csv(path: str, df):
     with open(path, "w", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file, delimeter=";")
+        writer = csv.writer(file, delimiter=";")
         writer.writerows(df)
 
 
@@ -373,5 +377,5 @@ def parse_pdf(path):
     file_path = Path(path)
     file_name = file_path.stem
     kinds = detect_pdf_kind(path)
-    result = parsing_tables(path, kinds, file_name)
-    return True if result else False
+    files = parsing_tables(path, kinds, file_name)
+    return None if files is None else files

@@ -1,10 +1,7 @@
 import torch
 from PIL import Image
-from torch.quantization import quantize_dynamic
-from torch import nn
-from transformers import Qwen2VLForConditionalGeneration, AutoProcessor
+from transformers import Qwen2VLForConditionalGeneration, AutoProcessor, AutoTokenizer
 from qwen_vl_utils import process_vision_info
-
 
 MODEL_ID = "Qwen/Qwen2-VL-7B-Instruct"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
@@ -12,6 +9,7 @@ TORCH_DTYPE = torch.bfloat16 if DEVICE == "cuda" else torch.float32
 
 model = None
 processor = None
+
 
 def load_model():
     global model, processor
@@ -23,8 +21,13 @@ def load_model():
         processor = AutoProcessor.from_pretrained(MODEL_ID)
 
 
-def ask_qwen(image_path: str, question: str, tables_text: str, header: str, max_new_tokens: int = 256, ) -> str:
+def tokens_count(text):
+    tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+    tokens = tokenizer.encode(text, add_special_tokens=False)
+    return len(tokens)
 
+
+def ask_qwen(image_path: str, question: str, tables_text: str, header: str, max_new_tokens: int = 32768, ) -> str:
     load_model()
 
     if image_path is not None:
@@ -35,7 +38,7 @@ def ask_qwen(image_path: str, question: str, tables_text: str, header: str, max_
             "content": [
                 {"type": "image", "image": img},
                 {"type": "text", "text":
-                    "Вот таблица, которую необходимо преобразовать:\n" 
+                    "Вот таблица, которую необходимо преобразовать:\n"
                     f"{tables_text}\n\n"
                     "Задача: \n"
                     f"{question}\n\n"
@@ -44,38 +47,38 @@ def ask_qwen(image_path: str, question: str, tables_text: str, header: str, max_
                     "2. Первая строка — это заголовки (столбцы).\n"
                     "3. Если данных нет, ставь '-'.\n"
                     "4. Не добавляй лишний текст или комментарии, возвращай только CSV.\n"
-                }
+                 }
             ],
         }]
     else:
         messages = [
             {
-            "role": "system",
-            "content":
-                [{
-                "type": "text", "text":
-                f"Ты — ассистент по обработке табличных данных. У тебя есть шаблон таблицы с фиксированными столбцами: '{header}'."
-                "Задача: "
-                "- Возьми входные табличные данные и распредели их содержимое строго в эти столбцы."
-                "- Данные из одной входной ячейки должны помещаться только в одну подходящую по смыслу ячейку выходной таблицы. Не разбивай данные из одной ячейки на несколько. "
-                "- Если данные подходят по смыслу к столбцам 'Количество', 'Наименование' или 'Единица измерения', размести их там."
-                "- Все остальные данные (например, описания, характеристики, требования) записывай в столбец 'Техническое задание'. "
-                "- Если данных для 'Технического задания' несколько, объедини их в одну ячейку с помощью точек или запятых. "
-                "- Если в входных данных несколько строк, обработай каждую строку отдельно и выведи таблицу с несколькими строками. "
-                "- Не добавляй новые столбцы или строки. Не меняй порядок столбцов. Если данных для какого-то столбца нет, оставь ячейку пустой. "
-                "- Выводи результат только в формате таблицы Markdown. Ничего больше не пиши."
-                }],
+                "role": "system",
+                "content":
+                    [{
+                        "type": "text", "text":
+                            f"Ты — ассистент по обработке табличных данных. У тебя есть шаблон таблицы с фиксированными столбцами: '{header}'."
+                            "Задача: "
+                            "- Возьми входные табличные данные и распредели их содержимое строго в эти столбцы."
+                            "- Данные из одной входной ячейки должны помещаться только в одну подходящую по смыслу ячейку выходной таблицы. Не разбивай данные из одной ячейки на несколько. "
+                            "- Если данные подходят по смыслу к столбцам 'Количество', 'Наименование' или 'Единица измерения', размести их там."
+                            "- Все остальные данные (например, описания, характеристики, требования) записывай в столбец 'Техническое задание'. "
+                            "- Если данных для 'Технического задания' несколько, объедини их в одну ячейку с помощью точек или запятых. "
+                            "- Если в входных данных несколько строк, обработай каждую строку отдельно и выведи таблицу с несколькими строками. "
+                            "- Не добавляй новые столбцы или строки. Не меняй порядок столбцов. Если данных для какого-то столбца нет, оставь ячейку пустой. "
+                            "- Выводи результат только в формате таблицы Markdown. Ничего больше не пиши."
+                    }],
             },
             {
-            "role": "user",
-            "content":
-                [{
-                    "type": "text", "text":
-                    "Вот таблица, которую необходимо преобразовать:\n"
-                    f"{tables_text}\n\n"
-                    "Задача: \n"
-                    f"{question}\n\n"
-                }]
+                "role": "user",
+                "content":
+                    [{
+                        "type": "text", "text":
+                            "Вот таблица, которую необходимо преобразовать:\n"
+                            f"{tables_text}\n\n"
+                            "Задача: \n"
+                            f"{question}\n\n"
+                    }]
             }
         ]
 
@@ -95,4 +98,3 @@ def ask_qwen(image_path: str, question: str, tables_text: str, header: str, max_
     gen_ids = output_ids[:, inputs["input_ids"].shape[1]:]
     answer = processor.batch_decode(gen_ids, skip_special_tokens=True, clean_up_tokenization_spaces=False)[0]
     return answer
-
