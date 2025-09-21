@@ -2,11 +2,37 @@
 from pathlib import Path
 import sys
 import re
+import numpy as np
 import pdfplumber as pdf
 import math
-import csv
 from src.utils.config import HEADER_ANCHORS, PARSING_DIR
+from src.utils.df_utils import write_to_json
+from src.utils.registry import register_parser
+import matplotlib.pyplot as plt
+from sklearn.cluster import KMeans
 
+
+
+def plot_histogram(data, orientation="vertical", title="Гистограмма"):
+    """
+    Строит гистограмму.
+    orientation = "vertical" → гистограмма по X (для строк)
+    orientation = "horizontal" → гистограмма по Y (для колонок)
+    """
+    plt.figure(figsize=(8, 4))
+
+    if orientation == "vertical":
+        plt.bar(range(len(data)), data, color="steelblue")
+        plt.xlabel("Координата X")
+        plt.ylabel("Частота")
+    else:
+        plt.barh(range(len(data)), data, color="coral")
+        plt.ylabel("Координата Y")
+        plt.xlabel("Частота")
+
+    plt.title(title)
+    plt.tight_layout()
+    plt.show()
 
 def histogram_words(page, lines, header,
                     n_lines=15):
@@ -85,12 +111,94 @@ def histogram_words(page, lines, header,
 
     for i, column in enumerate(columns):
         columns[i] = (" ".join(column)).strip()
+
     return zero_bounds, columns
+
+
+def histogram_lines(page, lines, header, n_lines=15):
+
+    if header is not None:
+        start = header["top_idx"]
+        end = min(len(lines), header["bottom_idx"] + 1 + n_lines)
+    else:
+        start = 0
+        end = len(lines)
+
+    roi_words = [w for ln in lines[start:end] for w in ln["words"]]
+
+    segments = [{"y0": float(w["top"]), "y1": float(w["bottom"])} for w in roi_words]
+
+    y_min = min(w["top"] for w in roi_words)
+    y_max = max(w["bottom"] for w in roi_words)
+
+    # 2. собираем сегменты из картинок (если есть)
+    roi_images = []
+    if getattr(page, "images", []):
+        for img in page.images:
+            img_top, img_bottom = float(img["top"]), float(img["bottom"])
+            if not (img_bottom <= y_min or img_top >= y_max):
+                roi_images.append({"y0": float(img["top"]), "y1": float(img["bottom"])})
+        segments += [{"y0": img["y0"], "y1": img["y1"]} for img in roi_images if roi_images]
+
+    # 3. диапазон по Y
+    y_min = math.floor(min(s["y0"] for s in segments))
+    y_max = math.ceil(max(s["y1"] for s in segments))
+    height = y_max - y_min
+
+    # 4. строим гистограмму
+    occ = [0] * height
+    for s in segments:
+        i0 = max(0, int(math.floor(s["y0"]) - y_min))
+        i1 = min(height, int(math.ceil(s["y1"]) - y_min))
+        for i in range(i0, i1):
+            occ[i] += 1
+    occ = [0 if y <= 1 else y for y in occ]
+
+    # --- считаем пустоты ---
+    zero_bounds = []
+    in_zero = False
+    start = None
+    prev_gap = None
+
+    for i, val in enumerate(occ):
+        if val == 0 and not in_zero:
+            # вошли в зону пустоты
+            in_zero, start = True, i
+
+        elif val != 0 and in_zero:
+            # вышли из зоны пустоты
+            in_zero = False
+            gap_len = i - start
+
+            if prev_gap is None:
+                # первая пустота – просто запоминаем
+                prev_gap = gap_len
+            else:
+                # проверяем скачок
+                if gap_len > prev_gap * 5:  # коэффициент "скачка", можно настроить
+                    mid = (start + i - 1) / 2
+                    zero_bounds.append(y_min + mid)
+                    prev_gap = None  # обнуляем счётчик
+                else:
+                    prev_gap = gap_len
+
+    # если пустота до конца
+    if in_zero:
+        gap_len = len(occ) - start
+        if prev_gap is None or gap_len > prev_gap * 2:
+            mid = (start + len(occ) - 1) / 2
+            zero_bounds.append(y_min + mid)
+
+    zero_bounds.append(y_max)
+
+    print(f"{zero_bounds = }")
+    return zero_bounds
+
 
 
 def norm(s: str) -> str:
     s = s.lower().replace("ё", "е")
-    s = re.sub(r"[^\w\s-]", " ", s)  # уберём пунктуацию
+    #s = re.sub(r"[^\w\s-]", " ", s)  # уберём пунктуацию
     s = " ".join(s.split())
     return s
 
@@ -271,28 +379,68 @@ def extract_tables_on_page(page):
         return tables
 
 
-def parse_table_block(page, lines, header: dict, bounds: list[float],
+# def parse_table_block(page, lines, header: dict, bounds: list[float],
+#                       n_rows: int | None = None) -> dict:
+#     """
+#     Возвращает чистые «сырые» данные после шапки:
+#       {
+#         "bounds": [...],
+#         "start_idx": int,
+#         "end_idx": int,
+#         "raw_rows": [ [col0, col1, ...], ... ]
+#       }
+#     """
+#     start = header["bottom_idx"] + 1
+#     end = len(lines) if n_rows is None else min(len(lines), start + n_rows)
+#
+#     raw_rows = cut_block_into_matrix(lines, bounds, start, end)
+#     return {
+#         "bounds": bounds[:],
+#         "start_idx": start,
+#         "end_idx": end,
+#         "raw_rows": raw_rows,
+#     }
+
+
+def parse_table_block(page, lines, header: dict, bounds, y_bounds: list[float],
                       n_rows: int | None = None) -> dict:
     """
-    Возвращает чистые «сырые» данные после шапки:
-      {
-        "bounds": [...],
-        "start_idx": int,
-        "end_idx": int,
-        "raw_rows": [ [col0, col1, ...], ... ]
-      }
+    Делает двумерную сетку (X×Y) из гистограмм и собирает ячейки таблицы.
     """
-    start = header["bottom_idx"] + 1
-    end = len(lines) if n_rows is None else min(len(lines), start + n_rows)
+    if header is not None:
+        start = header["bottom_idx"] + 1
+        end = len(lines) if n_rows is None else min(len(lines), start + n_rows)
 
-    raw_rows = cut_block_into_matrix(lines, bounds, start, end)
+    else:
+        start = 0
+        end = len(lines) if n_rows is None else min(len(lines), start + n_rows)
+
+    content_lines = lines[start:end]
+
+    cleaned_rows = []
+    for row_idx in range(len(y_bounds) - 1):
+        y0, y1 = y_bounds[row_idx], y_bounds[row_idx + 1]
+        cleaned_row = []
+        for col_idx in range(len(bounds) - 1):
+            x0, x1 = bounds[col_idx], bounds[col_idx + 1]
+
+            # собираем слова в прямоугольнике (ячейке)
+            cell_words = []
+            for ln in content_lines:
+                for w in ln["words"]:
+                    if (x0 <= float(w["x0"]) < x1) and (y0 <= float(w["top"]) < y1):
+                        cell_words.append(w["text"])
+
+            text = " ".join(cell_words).strip()
+            cleaned_row.append(text)
+        cleaned_rows.append(cleaned_row)
+
     return {
         "bounds": bounds[:],
         "start_idx": start,
         "end_idx": end,
-        "raw_rows": raw_rows,
+        "raw_rows": cleaned_rows,
     }
-
 
 def normalize_table(table):
     for i, row in enumerate(table):
@@ -328,9 +476,9 @@ def parsing_tables(path: str, kinds, file_name: str):
                 table = normalize_table(table)
 
                 if select_table(table):
-                    output_path = output_path / f"{file_name}_table{i}.csv"
-                    write_to_csv(output_path, table)
-                    files_list.append(f"{file_name}_table{i}.csv")
+                    output_path = output_path / f"{file_name}_table{i}.json"
+                    write_to_json(output_path, table)
+                    files_list.append(f"{file_name}_table{i}.json")
 
             if not tables:
                 continue
@@ -348,8 +496,8 @@ def parsing_tables(path: str, kinds, file_name: str):
         lines = group_words_into_lines(words, y_tol=3.0)
         hdr_idx = find_header_line_idx(lines)
         header = find_header(hdr_idx, lines, page)
-        bounds, labels = histogram_words(page, lines, header, n_lines=30)
-        if not bounds:
+        x_bounds, labels = histogram_words(page, lines, header, n_lines=30)
+        if not x_bounds:
             print("Не удалось определить границы колонок")
             return
         raw_rows = [labels]
@@ -357,22 +505,17 @@ def parsing_tables(path: str, kinds, file_name: str):
             page = f.pages[i - 1]
             words = page.extract_words(use_text_flow=True, keep_blank_chars=False) or []
             lines = group_words_into_lines(words, y_tol=3.0)
-            result = parse_table_block(page, lines, header, bounds, n_rows=None)
+            header_page = header if i == 0 else None
+            y_bounds = histogram_lines(page, lines, header_page, n_lines=30)
+            result = parse_table_block(page, lines, header_page, x_bounds, y_bounds, n_rows=None)
             raw_rows += result["raw_rows"]
-        output_path = output_path / f"{file_name}.csv"
-        files_list.append(f"{file_name}.csv")
-        write_to_csv(output_path, raw_rows)
-
+        output_path = output_path / f"{file_name}.json"
+        files_list.append(f"{file_name}.json")
+        write_to_json(output_path, raw_rows)
         return files_list
     return None
 
-
-def write_to_csv(path: str, df):
-    with open(path, "w", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file, delimiter=";")
-        writer.writerows(df)
-
-
+@register_parser(".pdf")
 def parse_pdf(path):
     file_path = Path(path)
     file_name = file_path.stem
