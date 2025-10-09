@@ -56,29 +56,6 @@ def load_model() -> None:
         raise
 
 
-def tokens_count3(text: str) -> int:
-    """Count tokens in text using Qwen3 tokenizer.
-    
-    Args:
-        text: Text to count tokens for.
-        
-    Returns:
-        Number of tokens in the text.
-        
-    Raises:
-        Exception: If tokenizer loading fails.
-    """
-    try:
-        logger.debug(f"Counting tokens for text with {len(text)} characters")
-        tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-        tokens = tokenizer.encode(text, add_special_tokens=False)
-        token_count = len(tokens)
-        logger.debug(f"Token count: {token_count}")
-        return token_count
-    except Exception as e:
-        logger.error(f"Error counting tokens: {e}")
-        raise
-
 
 def ask_qwen3(prompt: Optional[str] = None, max_new_tokens: int = 2048) -> str:
     """Query Qwen3 model with text prompt.

@@ -91,7 +91,7 @@ def _load_csv_schema(csv_path: Path) -> List[str]:
         FileNotFoundError: If CSV file doesn't exist.
     """
     try:
-        df = pd.read_csv(csv_path, sep=';', nrows=0)
+        df = pd.read_csv(csv_path, sep=',', nrows=0)
         columns = list(df.columns)
         logger.debug(f"Loaded {len(columns)} columns from {csv_path}: {columns}")
         return columns
@@ -288,6 +288,13 @@ def ask_qwen3_structured(
         # Получаем JSON схему для промпта
         json_schema = container_model.model_json_schema()
         
+        # Логируем JSON схему
+        logger.info(f"\n{'='*60}")
+        logger.info("JSON Schema for structured output:")
+        logger.info(f"{'='*60}")
+        logger.info(f"{json_schema}")
+        logger.info(f"{'='*60}\n")
+        
         # Получаем список колонок для header
         if extended:
             csv_path = MODEL_DIR / "extended.csv"
@@ -305,10 +312,11 @@ def ask_qwen3_structured(
         )
         
         # User message содержит только данные
+        system_message_content = system_content.replace("{tables_text}", "")  # Убираем placeholder из system
         messages = [
             {
                 "role": "system",
-                "content": system_content.replace("{tables_text}", "")  # Убираем placeholder из system
+                "content": system_message_content
             },
             {
                 "role": "user", 
@@ -317,8 +325,17 @@ def ask_qwen3_structured(
         ]
         
         logger.info("Preparing model input with JSON schema from CSV...")
-        logger.debug(f"System prompt length: {len(system_content)} chars")
-        logger.debug(f"Schema columns: {header_str}")
+        logger.info(f"Schema columns: {header_str}")
+        logger.info(f"Total messages count: {len(messages)}")
+        
+        # Логируем полностью все сообщения
+        for idx, message in enumerate(messages, 1):
+            logger.info(f"\n{'='*60}")
+            logger.info(f"Message {idx}/{len(messages)} - Role: {message['role']}")
+            logger.info(f"{'='*60}")
+            logger.info(f"Content length: {len(message['content'])} characters")
+            logger.info(f"Full content:\n{message['content']}")
+            logger.info(f"{'='*60}\n")
         
         # Применяем chat template с параметром enable_thinking (из статьи)
         text = tokenizer.apply_chat_template(
@@ -328,11 +345,19 @@ def ask_qwen3_structured(
             enable_thinking=enable_thinking  # Switches between thinking and non-thinking modes
         )
         
+        # Логируем финальный текст после применения chat template
+        logger.info(f"\n{'='*60}")
+        logger.info("Final text after applying chat template:")
+        logger.info(f"{'='*60}")
+        logger.info(f"Text length: {len(text)} characters")
+        logger.info(f"Full text:\n{text}")
+        logger.info(f"{'='*60}\n")
+        
         model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
         eos_token_id = tokenizer.eos_token_id
         
         logger.info(f"Running model inference with max_new_tokens: {max_new_tokens}")
-        logger.debug(f"Input token count: {model_inputs.input_ids.shape[1]}")
+        logger.info(f"Input token count: {model_inputs.input_ids.shape[1]}")
         
         generated_ids = model.generate(
             **model_inputs,
@@ -348,7 +373,14 @@ def ask_qwen3_structured(
         output_text = tokenizer.decode(output_ids, skip_special_tokens=True)
         
         logger.info(f"Model inference completed. Generated {len(output_text)} characters")
-        logger.debug(f"Generated text preview: {output_text[:200]}...")
+        
+        # Логируем полный ответ модели
+        logger.info(f"\n{'='*60}")
+        logger.info("RAW Model Response:")
+        logger.info(f"{'='*60}")
+        logger.info(f"Response length: {len(output_text)} characters")
+        logger.info(f"Full response:\n{output_text}")
+        logger.info(f"{'='*60}\n")
         
         # Очистка вывода от возможного Markdown синтаксиса
         output_text_clean = output_text.strip()
@@ -369,11 +401,30 @@ def ask_qwen3_structured(
                     json_lines.append(line)
             output_text_clean = "\n".join(json_lines)
         
+        # Логируем очищенный JSON перед валидацией
+        logger.info(f"\n{'='*60}")
+        logger.info("Cleaned JSON for validation:")
+        logger.info(f"{'='*60}")
+        logger.info(f"Cleaned JSON length: {len(output_text_clean)} characters")
+        logger.info(f"Cleaned JSON:\n{output_text_clean}")
+        logger.info(f"{'='*60}\n")
+        
         # Валидация через model_validate_json (метод из статьи)
         logger.info("Validating output with Pydantic model_validate_json...")
         structured_result = container_model.model_validate_json(output_text_clean)
         
         logger.info(f"Successfully validated structured output with {len(structured_result.rows)} rows")
+        
+        # Логируем валидированный результат
+        logger.info(f"\n{'='*60}")
+        logger.info("Validated Pydantic Result:")
+        logger.info(f"{'='*60}")
+        logger.info(f"Number of rows: {len(structured_result.rows)}")
+        logger.info(f"Result object: {structured_result}")
+        if structured_result.rows:
+            logger.info(f"First row sample: {structured_result.rows[0]}")
+        logger.info(f"{'='*60}\n")
+        
         return structured_result
         
     except Exception as e:

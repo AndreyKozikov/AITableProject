@@ -11,7 +11,7 @@ from typing import Any, List, Optional, Union
 
 import pandas as pd
 
-from src.mapper.mapper import mapper
+from src.mapper.mapper import mapper, mapper_structured
 from src.parsers.img_parser import image_ocr, parse_images_ai
 from src.parsers.pdf_parser import parse_pdf
 from src.parsers.txt_parser import load_txt_file
@@ -204,8 +204,16 @@ def process_files(files: List[Path],
             if not files_list_csv:
                 logger.warning("No processed files for mapping")
                 return None
-            text, header = mapping_files(files_list_csv, extended=extended)
-            rows = parse_pipe_table(text)
+            # text, header = mapping_files(files_list_csv, extended=extended)
+            # rows = parse_pipe_table(text)
+
+            rows, header = mapper_structured(
+                        files=files_list_csv,
+                        extended=False,  # или True для расширенного режима
+                        enable_thinking=False  # или True для режима рассуждений
+                    )
+
+
             logger.info("Local processing completed")
         
         file_path = save_to_xlsx(rows, header)

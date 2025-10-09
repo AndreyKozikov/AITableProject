@@ -13,10 +13,11 @@ from typing import Any, Dict, Generator, List, Tuple, Union
 
 import pandas as pd
 
-from src.mapper.ask_qwen2 import ask_qwen2, tokens_count
-from src.mapper.ask_qwen3 import ask_qwen3, tokens_count3
-from src.mapper.ask_llama2 import ask_llama2, tokens_count_llama
-from src.utils.config import MODEL_DIR, PARSING_DIR, PROMPT_TEMPLATE
+from src.mapper.ask_qwen2 import ask_qwen2
+from src.mapper.ask_qwen3 import ask_qwen3
+from src.mapper.ask_llama2 import ask_llama2
+from src.mapper.ask_qwen3_so import ask_qwen3_structured, extract_rows_as_dicts
+from src.utils.config import MODEL_DIR, PARSING_DIR, PROMPT_TEMPLATE, PROMPT_TEMPLATE_SO
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -221,6 +222,10 @@ def mapper_structured(
                 logger.warning(f"File {file} is empty, skipping")
                 continue
             
+            # Convert JSON list of dicts to DataFrame for logging
+            df = pd.DataFrame(json_data)
+            logger.info(f"DataFrame shape: {df.shape}, columns: {list(df.columns)}")
+            
             # Split data into chunks
             chunk_count = 0
             for chunk in chunk_data(list(json_data), chunk_size=chunk_size):
@@ -237,8 +242,14 @@ def mapper_structured(
                 # Combine all records
                 tables_text = "\n\n".join(tables_text_parts)
                 
+                # Log chunk info
                 logger.info(f"Processing chunk {chunk_count} with {len(chunk)} records")
-                logger.debug(f"Chunk data preview:\n{tables_text[:300]}...")
+                logger.info(f"Chunk data preview:\n{tables_text}")
+                logger.info(f"Chunk keys: {list(chunk[0].keys()) if chunk else 'empty'}")
+                
+                # Log prompt info
+                logger.info(f"Prompt length: {len(tables_text)} characters")
+                logger.info(f"Prompt preview (first 300 chars):\n{tables_text}")
                 
                 # Send to Qwen3 structured output model
                 logger.info(f"Sending chunk {chunk_count} to Qwen3 structured model...")
@@ -250,10 +261,20 @@ def mapper_structured(
                     enable_thinking=enable_thinking
                 )
                 
+                # Log structured result info
+                if structured_result:
+                    logger.info(f"Received structured response from model")
+                    logger.info(f"Structured result type: {type(structured_result)}")
+                    logger.info(f"Structured result preview: {str(structured_result)}")
+                else:
+                    logger.warning(f"Empty structured response from model for chunk {chunk_count}")
+                
                 # Extract rows as dictionaries with Russian field names
                 chunk_rows = extract_rows_as_dicts(structured_result, use_aliases=True)
                 
                 logger.info(f"Received {len(chunk_rows)} structured rows from chunk {chunk_count}")
+                if chunk_rows:
+                    logger.info(f"Sample row preview: {chunk_rows[0]}")
                 all_rows.extend(chunk_rows)
             
             logger.info(f"Completed processing file {file}: {chunk_count} chunks, {len(all_rows)} total rows")
