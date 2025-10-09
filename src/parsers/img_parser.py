@@ -1,173 +1,213 @@
-from paddleocr import PPStructureV3, PaddleOCR
-import pandas as pd
-from PIL import Image
-from src.utils.config import PARSING_DIR
-from src.utils.preprocess_image import preprocess_image
+"""Image Parser Module.
+
+Модуль парсинга изображений с OCR обработкой.
+
+This module handles image parsing and OCR processing for extracting tabular data
+from images using PaddleOCR and other AI models.
+"""
+
+import ast
+import os
+import re
+from io import StringIO
+from pathlib import Path
+from typing import List, Optional, Union
+
 import numpy as np
-import re, ast
+import pandas as pd
+from paddleocr import PPStructureV3, PaddleOCR
+from PIL import Image
+
 from src.mapper.ask_qwen2 import ask_qwen2
-from src.utils.df_utils import write_to_json, clean_dataframe
+from src.utils.config import PARSING_DIR
+from src.utils.df_utils import write_to_json
+from src.utils.logging_config import get_logger
+from src.utils.preprocess_image import preprocess_image
 from src.utils.registry import register_parser
 
+# Получение настроенного логгера
+logger = get_logger(__name__)
 
 
-def load_images(image_path):
-    return np.array(Image.open(image_path).convert("RGB"))
-
-
-@register_parser(".jpg", ".jpeg", "")
-def image_ocr(image_path):
-    image = load_images(image_path)
-    ocr_model = PaddleOCR(use_angle_cls=True, lang="ru")
-    files = []
-    table_engine = PPStructureV3(ocr_version="PP-OCRv5", lang="ru", device="cpu")
-    results = table_engine.predict(image)
-    for i, r in enumerate(results):
-        print(f"{i}: {r}")
-        for item in r['parsing_res_list']:
-            if item.label == 'table':
-                html = item.content
-            else:
-                continue
-        dfs = pd.read_html(html)
-        if dfs:
-            df=dfs[0]
-            df = clean_dataframe(df, use_languagetool=True)
-            file_path = PARSING_DIR / f"table_{i}.xlsx"
-            df.to_excel(file_path, index=False)
-            files.append(file_path)
-    return files
-
-
-def extract_table(answer: str):
-    match = re.search(r"\[.*\]", answer, re.S)
-    if match:
-        try:
-            return ast.literal_eval(match.group(0))
-        except:
-            pass
-    return None
-
-
-#@register_parser(".jpg", ".jpeg", ".png")
-def image_ocr_dd(image_path):
-    image_path = preprocess_image(image_path)
-    # -------------------- Параметры окружения --------------------
-    DD_USE_TORCH = True  # True=PyTorch, False=TensorFlow
-    CUDA_VISIBLE_DEVICES = ""  # ""=CPU, "0"=GPU0 и т.д.
-    TESSDATA_PREFIX = r"C:\\Program Files\\Tesseract-OCR\\tessdata"  # путь к tessdata
-    OCR_LANGS = "eng+rus"  # языки Tesseract (пример: "rus+eng")
-    # -------------------------------------------------------------
-
-    import os
-    os.environ["DD_USE_TORCH"] = "1" if DD_USE_TORCH else "0"
-    os.environ.pop("DD_USE_TF", None)
-    os.environ["CUDA_VISIBLE_DEVICES"] = str(CUDA_VISIBLE_DEVICES)
-    os.environ["TESSDATA_PREFIX"] = TESSDATA_PREFIX
-
-    # --- Импорт и сборка пайплайна ---
-    from deepdoctection.analyzer.dd import get_dd_analyzer
-    from deepdoctection.pipe.doctectionpipe import DoctectionPipe
-    from deepdoctection.extern.tessocr import TesseractOcrDetector
-    from deepdoctection.utils.fs import get_configs_dir_path
-    from deepdoctection.pipe.text import TextExtractionService
-    from deepdoctection.analyzer.config import cfg as _cfg
-
-    # Сначала собираем стандартный пайплайн с Tesseract и сегментацией таблиц
-    custom_args = [
-        "USE_TABLE_SEGMENTATION=True",
-        "USE_OCR=True",
-        "OCR.USE_TESSERACT=True",
-        "OCR.USE_DOCTR=False",
-        "USE_PDF_MINER=False",
-    ]
-
-    pipe: DoctectionPipe = get_dd_analyzer(
-        reset_config_file=False,
-        load_default_config_file=True,
-        config_overwrite=custom_args,
-    )
-
-    # Затем создаём собственный TesseractOcrDetector и задаём язык как в примере
-    _tess_yaml = get_configs_dir_path() / _cfg.OCR.CONFIG.TESSERACT
-    ocr = TesseractOcrDetector(_tess_yaml.as_posix())
-    ocr.config.freeze(False)
-    ocr.config.LANGUAGES = OCR_LANGS  # например "rus+eng"
-    ocr.config.LINES = True
-    ocr.config.psm = 1
-    ocr.config.freeze(True)
-
-    # Подменяем компонент OCR в пайплайне
-    _text_comp = TextExtractionService(ocr)
-    for _i, _comp in enumerate(pipe.pipe_component_list):
-        if _comp.__class__.__name__ == "TextExtractionService":
-            pipe.pipe_component_list[_i] = _text_comp
-            break
-
-    # --- Чтение изображения и запуск ---
-    with open(image_path, "rb") as f:
-        img_bytes = f.read()
-
-    # output="page" вернёт Page-объекты со всеми таблицами
-    try:
-        pages_df = pipe.analyze(path=image_path, bytes=img_bytes, file_type=".jpg", output="page")
-        pages_df.reset_state()
-    except Exception as e:
-        import traceback
-        print("Pipeline failed:", type(e).__name__, e)
-        traceback.print_exc()
-        raise
-    # --- Извлечение таблиц ---
-    from IPython.display import display
-    import pandas as pd
-    for page in pages_df:
-        print(f"\n=== PAGE {page.page_number} ===")
-        if not page.tables:
-            print("Таблиц не найдено")
-        for i, table in enumerate(page.tables, 1):
-            print(f"--- Table {i} ---")
-            df_tbl = pd.DataFrame(table.csv)  # Table не имеет .df(); используем csv->DataFrame
-            display(df_tbl)
-            # При необходимости сохраните:
-            # df_tbl.to_excel(f"table_{page.page_number}_{i}.xlsx", index=False)
-
-
-def extract_table(answer: str):
-    match = re.search(r"\[.*\]", answer, re.S)
-    if match:
-        try:
-            return ast.literal_eval(match.group(0))
-        except:
-            pass
-    return None
-
-
-#@register_parser(".jpg", ".jpeg")
-def parse_images_ai(image_path):
-    image = load_images(image_path)
-    image = preprocess_image(image_path, image)
-    prompt = """
-    Ты — распознаватель таблиц. 
-    Нужно извлечь все строки и все столбцы таблицы.
-    Формат ответа:
-    - Строго список списков (Python-подобный массив).
-    - Каждый вложенный список = одна строка таблицы.
-    - Первый вложенный список = заголовки (если они есть).
-    - Остальные вложенные списки = все строки таблицы по порядку.
-    - В каждой строке должно быть одинаковое количество элементов (как в таблице).
-    - Не добавляй пояснений, текста или комментариев вне списка.
-    - Тип данных в одном столбце должен быть одинаковый для всех строк.
+def _load_images(image_path: Union[str, Path]) -> np.ndarray:
+    """Load image, apply preprocessing, and convert to numpy array.
     
-    Пример правильного ответа:
-    [["Колонка1", "Колонка2"],
-     ["Значение1", "Значение2"]]
+    Args:
+        image_path: Path to image file.
+        
+    Returns:
+        Numpy array of the preprocessed image.
+        
+    Raises:
+        Exception: If image loading or preprocessing fails.
     """
-    answer = ask_qwen2(image_path=image, prompt=prompt)
-    print(f"answer: {answer}")
-    data = extract_table(answer)
-    print(f"data: {data}")
-    file_name = f"{image_path.stem}.json"
-    print(file_name)
-    out_path = PARSING_DIR / f"{file_name}"
-    write_to_json(out_path, data)
-    return file_name
+    try:
+        logger.debug(f"Loading image: {image_path}")
+        
+        # Apply preprocessing without saving to disk
+        preprocessed_image = preprocess_image(str(image_path), save_to_disk=False)
+        logger.debug(f"Image preprocessed successfully. Shape: {preprocessed_image.shape}")
+        
+        return preprocessed_image
+    except Exception as e:
+        logger.error(f"Failed to load image {image_path}: {e}")
+        raise
+
+
+@register_parser(".jpg", ".jpeg", ".png")
+def image_ocr(image_path: Union[str, Path]) -> List[Path]:
+    """Perform OCR processing on image with table extraction.
+    
+    Args:
+        image_path: Path to image file.
+        
+    Returns:
+        List of paths to created JSON files with extracted tables.
+        
+    Raises:
+        Exception: If OCR processing fails.
+    """
+    logger.info(f"Starting OCR processing for image: {image_path}")
+    
+    try:
+        image = _load_images(image_path)
+        logger.info("Initializing PaddleOCR models...")
+        
+        #ocr_model = PaddleOCR(use_angle_cls=True, lang="ru")
+        table_engine = PPStructureV3(ocr_version="PP-OCRv5", lang="ru", device="cpu")
+        
+        logger.info("Running table structure prediction...")
+        results = table_engine.predict(image)
+        
+        files = []
+        for i, r in enumerate(results):
+            logger.info(f"Processing result {i}: found {len(r.get('parsing_res_list', []))} elements")
+            
+            for item in r['parsing_res_list']:
+                if item.label == 'table':
+                    html = item.content
+                    logger.debug(f"Found table HTML content: {len(html)} characters")
+                    
+                    try:
+                        dfs = pd.read_html(StringIO(html))
+                        if dfs:
+                            df = dfs[0]
+                            logger.info(f"Extracted table with shape: {df.shape}")
+                            
+                            # Save as JSON file with header detection and generation
+                            json_file_path = PARSING_DIR / f"table_{i}.json"
+                            write_to_json(
+                                json_file_path,
+                                df,
+                                detect_headers=True,
+                                temp_dir=PARSING_DIR
+                            )
+                            files.append(json_file_path)
+                            logger.info(f"Table saved as JSON: {json_file_path}")
+                        else:
+                            logger.warning(f"No dataframes extracted from HTML in result {i}")
+                    except Exception as e:
+                        logger.error(f"Error processing HTML table in result {i}: {e}")
+                        continue
+                else:
+                    logger.debug(f"Skipping non-table element: {item.label}")
+        
+        logger.info(f"OCR processing completed. Created {len(files)} files")
+        return files
+        
+    except Exception as e:
+        logger.error(f"Error in OCR processing for {image_path}: {e}")
+        return []
+
+
+def _extract_table(answer: str) -> Optional[List]:
+    """Extract table data from AI response text.
+    
+    Args:
+        answer: Text response from AI model.
+        
+    Returns:
+        List representation of table data or None.
+        
+    Raises:
+        Exception: If parsing fails.
+    """
+    logger.debug(f"Extracting table from answer with {len(answer)} characters")
+    
+    match = re.search(r"\[.*\]", answer, re.S)
+    if match:
+        try:
+            table_data = ast.literal_eval(match.group(0))
+            logger.info(f"Successfully extracted table with {len(table_data)} rows")
+            return table_data
+        except Exception as e:
+            logger.warning(f"Failed to parse table data: {e}")
+            return None
+    
+    logger.warning("No table pattern found in AI response")
+    return None
+
+
+
+def parse_images_ai(image_path: Union[str, Path]) -> Optional[str]:
+    """Process image using AI model for table extraction.
+    
+    Args:
+        image_path: Path to image file.
+        
+    Returns:
+        Filename of processed JSON file or None.
+        
+    Raises:
+        Exception: If AI processing fails.
+    """
+    logger.info(f"Starting AI-based image processing for: {image_path}")
+    
+    try:
+        image = _load_images(image_path)
+        image = preprocess_image(image_path, image)
+        
+        prompt = """
+        Ты — распознаватель таблиц. 
+        Нужно извлечь все строки и все столбцы таблицы.
+        Формат ответа:
+        - Строго список списков (Python-подобный массив).
+        - Каждый вложенный список = одна строка таблицы.
+        - Первый вложенный список = заголовки (если они есть).
+        - Остальные вложенные списки = все строки таблицы по порядку.
+        - В каждой строке должно быть одинаковое количество элементов (как в таблице).
+        - Не добавляй пояснений, текста или комментариев вне списка.
+        - Тип данных в одном столбце должен быть одинаковый для всех строк.
+        
+        Пример правильного ответа:
+        [["Колонка1", "Колонка2"],
+         ["Значение1", "Значение2"]]
+        """
+        
+        logger.info("Sending image to AI model for processing...")
+        answer = ask_qwen2(image_path=image, prompt=prompt)
+        
+        if answer:
+            logger.info(f"AI response received: {len(answer)} characters")
+            logger.debug(f"AI response preview: {answer[:200]}...")
+        else:
+            logger.warning("No response received from AI model")
+            return None
+        
+        data = _extract_table(answer)
+        if data:
+            logger.info(f"Extracted data: {len(data)} rows")
+        else:
+            logger.warning("No table data extracted from AI response")
+            return None
+        
+        file_name = f"{Path(image_path).stem}.json"
+        out_path = PARSING_DIR / file_name
+        write_to_json(out_path, data)
+        
+        logger.info(f"AI processing completed. Saved to: {out_path}")
+        return file_name
+        
+    except Exception as e:
+        logger.error(f"Error in AI image processing for {image_path}: {e}")
+        return None

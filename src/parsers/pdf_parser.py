@@ -3,13 +3,14 @@ from pathlib import Path
 import sys
 import re
 import numpy as np
+import pandas as pd
 import pdfplumber as pdf
 import math
 from src.utils.config import HEADER_ANCHORS, PARSING_DIR
 from src.utils.df_utils import write_to_json
 from src.utils.registry import register_parser
 import matplotlib.pyplot as plt
-from sklearn.cluster import KMeans
+
 
 
 
@@ -476,8 +477,16 @@ def parsing_tables(path: str, kinds, file_name: str):
                 table = normalize_table(table)
 
                 if select_table(table):
-                    output_path = output_path / f"{file_name}_table{i}.json"
-                    write_to_json(output_path, table)
+                    # Convert list of lists to DataFrame
+                    df = pd.DataFrame(table, dtype=str)
+                    
+                    output_file_path = output_path / f"{file_name}_table{i}.json"
+                    write_to_json(
+                        output_file_path,
+                        df,
+                        detect_headers=True,
+                        temp_dir=output_path
+                    )
                     files_list.append(f"{file_name}_table{i}.json")
 
             if not tables:
@@ -509,9 +518,18 @@ def parsing_tables(path: str, kinds, file_name: str):
             y_bounds = histogram_lines(page, lines, header_page, n_lines=30)
             result = parse_table_block(page, lines, header_page, x_bounds, y_bounds, n_rows=None)
             raw_rows += result["raw_rows"]
-        output_path = output_path / f"{file_name}.json"
+        
+        # Convert list of lists to DataFrame
+        df = pd.DataFrame(raw_rows, dtype=str)
+        
+        output_file_path = output_path / f"{file_name}.json"
         files_list.append(f"{file_name}.json")
-        write_to_json(output_path, raw_rows)
+        write_to_json(
+            output_file_path,
+            df,
+            detect_headers=True,
+            temp_dir=output_path
+        )
         return files_list
     return None
 

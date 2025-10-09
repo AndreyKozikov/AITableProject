@@ -1,0 +1,23 @@
+<div class="results-container">
+    <div class="results-header">
+        <h3>🎉 Обработка завершена успешно!</h3>
+        <div class="action-buttons">
+            <button class="btn-preview">👁️ Предварительный просмотр</button>
+        </div>
+    </div>
+    <div style="padding: 2rem;">
+        <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 1rem; margin-bottom: 1.5rem;">
+            <div style="text-align: center; padding: 1rem; background: #f8fafc; border-radius: 8px;">
+                <div style="font-size: 2rem; color: var(--success-color);">📊</div>
+                <div style="font-weight: 600; color: var(--primary-color);">Результат готов</div>
+                <div style="color: #64748b; font-size: 0.875rem;">{file_size} KB</div>
+            </div>
+            <div style="text-align: center; padding: 1rem; background: #f8fafc; border-radius: 8px;">
+                <div style="font-size: 2rem; color: var(--primary-color);">⏱️</div>
+                <div style="font-weight: 600; color: var(--primary-color);">Время обработки</div>
+                <div style="color: #64748b; font-size: 0.875rem;">{processing_time}</div>
+            </div>
+        </div>
+    </div>
+</div>
+

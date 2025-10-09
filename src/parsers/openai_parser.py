@@ -1,27 +1,24 @@
+"""OpenAI Parser Module.
+
+Модуль парсера OpenAI.
+
+Parser that uses OpenAI API for processing files and extracting
+tabular data with AI assistance.
+"""
+
 import os
 import re
-import logging
 from typing import List, Tuple
+
 from openai import OpenAI
-from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception
+from tenacity import retry, retry_if_exception, stop_after_attempt, wait_exponential
+
 from src.utils.config import OPENAI_API_KEY
+from src.utils.logging_config import get_logger
 from src.utils.registry import register_parser
 
-# Настройка логгера
-# создаём папку для логов, если её нет
-os.makedirs("logs", exist_ok=True)
-
-logging.basicConfig(
-    level=logging.DEBUG,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.FileHandler("logs/openai_parser.log", encoding="utf-8"),
-        logging.StreamHandler()
-    ],
-    force=True
-)
-
-logger = logging.getLogger(__name__)
+# Получение настроенного логгера
+logger = get_logger(__name__)
 
 PROMPT_TEMPLATE = """
 Ты — ассистент по обработке табличных данных.
@@ -39,19 +36,45 @@ PROMPT_TEMPLATE = """
 Выведи результат в виде Markdown-таблицы.
 """
 
+
 def is_retryable_exception(e: Exception) -> bool:
+    """Check if exception is retryable.
+    
+    Args:
+        e: Exception to check.
+        
+    Returns:
+        True if exception should trigger retry, False otherwise.
+    """
     text = str(e)
-    # Не повторяем, если именно rate_limit_exceeded
+    # Don't retry if rate_limit_exceeded
     if "rate_limit_exceeded" in text:
+        logger.warning(f"Rate limit exceeded, not retrying: {text}")
         return False
+    logger.debug(f"Exception is retryable: {text}")
     return True
+
 
 @register_parser("openai")
 def openai_parser(files: List[str]) -> Tuple[List[List[str]], List[str]]:
+    """Parse files using OpenAI API.
+    
+    Args:
+        files: List of file paths to process.
+        
+    Returns:
+        Tuple of (rows, headers) for table data.
+        
+    Raises:
+        ValueError: If files list is empty.
+        FileNotFoundError: If file not found.
+        Exception: If OpenAI API call fails.
+    """
+    logger.info(f"Starting OpenAI parsing for {len(files)} files")
+    
     if not files:
         raise ValueError("Список файлов пустой")
 
-    # Проверка существования файлов
     for path in files:
         if not os.path.exists(path):
             raise FileNotFoundError(f"Файл {path} не найден")
@@ -61,7 +84,8 @@ def openai_parser(files: List[str]) -> Tuple[List[List[str]], List[str]]:
     uploaded_files = []
     thread = None
     try:
-        # Загружаем файлы (они будут доступны ассистенту через file_search)
+        # Upload files
+        logger.info("Uploading files to OpenAI...")
         for path in files:
             with open(path, "rb") as f:
                 uploaded_file = client.files.create(
@@ -69,117 +93,131 @@ def openai_parser(files: List[str]) -> Tuple[List[List[str]], List[str]]:
                     purpose="assistants"
                 )
                 uploaded_files.append(uploaded_file)
-                logger.info(f"Загружен файл: {path} -> {uploaded_file.id}")
+                logger.info(f"Uploaded file: {path} -> {uploaded_file.id}")
 
-        # Создаём ассистента
+        # Create assistant
+        logger.info("Creating OpenAI assistant...")
         assistant = client.beta.assistants.create(
             name="Табличный ассистент",
             instructions=PROMPT_TEMPLATE,
-            model="gpt-5",  # актуальная модель
+            model="gpt-4o",
             tools=[{"type": "file_search"}]
         )
-        logger.info(f"Создан ассистент: {assistant.id}")
+        logger.info(f"Created assistant: {assistant.id}")
 
-        # Создаём тред
+        # Create thread
         thread = client.beta.threads.create()
-        logger.info(f"Создан тред: {thread.id}")
+        logger.info(f"Created thread: {thread.id}")
 
-        # Добавляем сообщение
+        # Create message with file attachments
+        attachments = [
+            {"file_id": f.id, "tools": [{"type": "file_search"}]} 
+            for f in uploaded_files
+        ]
+        
         message = client.beta.threads.messages.create(
             thread_id=thread.id,
             role="user",
-            content="Обработай приложенные файлы и верни таблицу в Markdown."
+            content="Обработай приложенные файлы и верни таблицу в Markdown.",
+            attachments=attachments
         )
-        logger.info(f"Добавлено сообщение: {message.id}")
+        logger.info(f"Added message: {message.id}")
 
-        # Запускаем
-        run = client.beta.threads.runs.create(
-            thread_id=thread.id,
-            assistant_id=assistant.id
+        # Run assistant with retry logic
+        @retry(
+            stop=stop_after_attempt(3),
+            wait=wait_exponential(multiplier=2, min=5, max=60),
+            retry=retry_if_exception(is_retryable_exception)
         )
-        logger.info(f"Запущен run: {run.id}")
-
-        # Ждём завершения
-        @retry(stop=stop_after_attempt(25),
-               wait=wait_exponential(multiplier=1, min=10, max=30),
-               retry=retry_if_exception(is_retryable_exception),
-               )
-        def wait_for_run_completion():
-            run_status = client.beta.threads.runs.retrieve(
+        def run_with_retry():
+            logger.info("Running OpenAI assistant...")
+            run = client.beta.threads.runs.create_and_poll(
                 thread_id=thread.id,
-                run_id=run.id
+                assistant_id=assistant.id,
+                timeout=300
             )
-            if run_status.status == "failed":
-                raise ValueError(f"Задание завершилось с ошибкой: {run_status.last_error}")
-            if run_status.status == "completed":
-                return run_status
-            raise ValueError("Run still in progress")
+            
+            if run.status == 'completed':
+                logger.info("Assistant run completed successfully")
+                messages = client.beta.threads.messages.list(
+                    thread_id=thread.id
+                )
+                
+                for msg in messages.data:
+                    if msg.role == 'assistant':
+                        content = msg.content[0].text.value
+                        logger.info(f"Assistant response received: {len(content)} characters")
+                        logger.debug(f"Assistant response preview: {content[:200]}...")
+                        return content
+                        
+                raise Exception("Нет ответа от ассистента")
+            else:
+                raise Exception(f"Выполнение не завершено. Статус: {run.status}")
 
-        try:
-            wait_for_run_completion()
-        except Exception as e:
-            logger.error(f"Run не завершился за 25 попыток: {e}")
-            raise
-
-        logger.info("Обработка завершена успешно")
-
-        # Получаем ответ
-        messages = client.beta.threads.messages.list(thread_id=thread.id)
-        if not messages.data:
-            raise ValueError("Ответ ассистента пустой")
-
-        full_text = ""
-        for m in messages.data:
-            if m.role == "assistant":
-                for c in m.content:
-                    if c.type == "text":
-                        full_text += c.text.value + "\n"
-
-        if not full_text.strip():
-            raise ValueError("Ассистент не вернул текстовый ответ")
-
-        logger.debug("Полный ответ ассистента:\n%s", full_text)
-
-        # Ищем первую таблицу
-        table_match = re.search(
-            r"(?m)^(\|.*\|\r?\n\|(?:[:-]+\s*\|)+\r?\n(?:\|.*\|\r?\n?)+)",
-            full_text
-        )
-        if not table_match:
-            raise ValueError("Таблица в ответе не найдена. Ответ ассистента:\n" + full_text)
-
-        markdown_table = table_match.group(1)
-
-        # Парсим таблицу
-        rows = []
-        header = []
-        lines = markdown_table.splitlines()
-        for i, line in enumerate(lines):
-            if not line.startswith("|"):
-                continue
-            cells = [c.strip() for c in line.strip("|").split("|")]
-            if i == 0:
-                header = cells
-                continue
-            if all(re.match(r"^:?-+:?$", c) for c in cells):  # разделитель
-                continue
-            if cells and any(cell for cell in cells):
-                rows.append(cells)
-
-        if not header:
-            raise ValueError("Заголовок таблицы не найден")
-
-        logger.info(f"Извлечено {len(rows)} строк из таблицы")
-        return rows, header
+        content = run_with_retry()
+        
+        # Parse markdown table
+        rows, headers = parse_markdown_table(content)
+        logger.info(f"Parsed {len(rows)} rows with {len(headers)} headers")
+        
+        return rows, headers
 
     except Exception as e:
-        logger.error(f"Ошибка в openai_parser: {str(e)}", exc_info=True)
+        logger.error(f"Error in OpenAI parser: {e}")
         raise
+        
     finally:
-        # Чистим загруженные файлы
-        for file_obj in uploaded_files:
+        # Cleanup
+        logger.info("Cleaning up OpenAI resources...")
+        try:
+            if thread:
+                client.beta.threads.delete(thread.id)
+                logger.info(f"Deleted thread: {thread.id}")
+        except Exception as e:
+            logger.warning(f"Failed to delete thread: {e}")
+            
+        for uploaded_file in uploaded_files:
             try:
-                client.files.delete(file_obj.id)
-                logger.info(f"Удален файл: {file_obj.id}")
+                client.files.delete(uploaded_file.id)
+                logger.debug(f"Deleted file: {uploaded_file.id}")
             except Exception as e:
-                logger.warning(f"Не удалось удалить файл {file_obj.id}: {str(e)}")
+                logger.warning(f"Failed to delete file {uploaded_file.id}: {e}")
+
+
+def parse_markdown_table(content: str) -> Tuple[List[List[str]], List[str]]:
+    """Parse markdown table from content.
+    
+    Args:
+        content: Markdown content containing table.
+        
+    Returns:
+        Tuple of (rows, headers).
+    """
+    logger.debug("Parsing markdown table from content")
+    
+    lines = content.strip().split('\n')
+    
+    # Find table lines (containing |)
+    table_lines = [line for line in lines if '|' in line and line.strip()]
+    
+    if not table_lines:
+        logger.warning("No table found in content")
+        return [], []
+    
+    # Parse header
+    header_line = table_lines[0]
+    headers = [cell.strip() for cell in header_line.split('|')[1:-1]]
+    logger.debug(f"Found headers: {headers}")
+    
+    # Skip separator line if present
+    start_idx = 2 if len(table_lines) > 1 and '-' in table_lines[1] else 1
+    
+    # Parse data rows
+    rows = []
+    for line in table_lines[start_idx:]:
+        cells = [cell.strip() for cell in line.split('|')[1:-1]]
+        if cells:  # Skip empty rows
+            rows.append(cells)
+    
+    logger.info(f"Parsed markdown table: {len(headers)} headers, {len(rows)} rows")
+    return rows, headers
