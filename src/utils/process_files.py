@@ -11,7 +11,7 @@ from typing import Any, List, Optional, Union
 
 import pandas as pd
 
-from src.mapper.mapper import mapper, mapper_structured
+from src.mapper.mapper import mapper_structured
 from src.parsers.img_parser import image_ocr, parse_images_ai
 from src.parsers.pdf_parser import parse_pdf
 from src.parsers.txt_parser import load_txt_file
@@ -90,79 +90,24 @@ def parsing_files(files: List[Path]) -> List[Path]:
     return parsing_files_name
 
 
-def mapping_files(files: List[Path], extended: bool) -> tuple:
-    """Map data from processed files.
-    
-    Args:
-        files: List of processed file paths.
-        extended: Extended processing mode flag.
-        
-    Returns:
-        Tuple of (table_text, headers).
-    """
-    logger.info(f"Starting mapping for {len(files)} files, extended mode: {extended}")
-    try:
-        result = mapper(files, extended)
-        logger.info("Mapping completed successfully")
-        return result
-    except Exception as e:
-        logger.error(f"Error in mapping files: {e}")
-        raise
-
-
-def parse_pipe_table(text: str) -> List[List[str]]:
-    """Parse pipe-separated table text.
-    
-    Args:
-        text: Table text to parse.
-        
-    Returns:
-        List of lists representing table rows and columns.
-    """
-    logger.debug(f"Parsing pipe table from text with {len(text)} characters")
-    
-    rows = []
-    for raw in text.strip().splitlines():
-        line = raw.strip()
-        if not line:
-            continue
-        if line.startswith('|') and line.endswith('|'):
-            line = line[1:-1]
-        cells = [c.strip() for c in line.split('|')]
-        rows.append(cells)
-        logger.debug(f"Parsed row with {len(cells)} cells: {cells[:3]}{'...' if len(cells) > 3 else ''}")
-    
-    logger.info(f"Parsed {len(rows)} rows from pipe table")
-    return rows
-
-
-def save_to_xlsx(rows: List[List[str]], header: List[str]) -> Path:
+def save_to_xlsx(rows: List[dict]) -> Path:
     """Save data to Excel file.
     
     Args:
-        rows: Table row data.
-        header: Column headers.
+        rows: List of dictionaries where each dict represents a table row.
+              Dictionary keys are column names, values are cell contents.
         
     Returns:
         Path to created Excel file.
     """
-    logger.info(f"Saving {len(rows)} rows with {len(header)} headers to Excel")
+    logger.info(f"Saving {len(rows)} rows to Excel")
     
     if not rows:
         logger.warning("No data to save to Excel")
         return None
     
-    max_cols = max(len(row) for row in rows)
-    logger.debug(f"Maximum columns in data: {max_cols}")
-    
-    # If data has more columns than header, add virtual names
-    if len(header) < max_cols:
-        extra_cols = [f"extra_{i}" for i in range(1, max_cols - len(header) + 1)]
-        header = header + extra_cols
-        logger.info(f"Added extra columns: {extra_cols}")
-
-    df = pd.DataFrame(rows, columns=header)
-    df.insert(0, 'N п.п.', range(1, len(df) + 1))
+    # Create DataFrame from list of dictionaries
+    df = pd.DataFrame(rows)
     
     file_path = OUT_DIR / 'result.xlsx'
     df.to_excel(file_path, index=False)
@@ -204,10 +149,8 @@ def process_files(files: List[Path],
             if not files_list_csv:
                 logger.warning("No processed files for mapping")
                 return None
-            # text, header = mapping_files(files_list_csv, extended=extended)
-            # rows = parse_pipe_table(text)
-
-            rows, header = mapper_structured(
+                
+            rows = mapper_structured(
                         files=files_list_csv,
                         extended=False,  # или True для расширенного режима
                         enable_thinking=False  # или True для режима рассуждений
@@ -216,7 +159,7 @@ def process_files(files: List[Path],
 
             logger.info("Local processing completed")
         
-        file_path = save_to_xlsx(rows, header)
+        file_path = save_to_xlsx(rows)
         if file_path:
             logger.info(f"File processing completed successfully: {file_path}")
         else:
