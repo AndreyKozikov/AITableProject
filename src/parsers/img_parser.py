@@ -6,20 +6,41 @@ This module handles image parsing and OCR processing for extracting tabular data
 from images using PaddleOCR and other AI models.
 """
 
-import ast
-import os
-import re
 from io import StringIO
 from pathlib import Path
-from typing import List, Optional, Union
+from typing import List, Union
 
+import cv2
 import numpy as np
 import pandas as pd
-from paddleocr import PPStructureV3, PaddleOCR
-from PIL import Image
+from paddleocr import PPStructureV3
 
-from src.mapper.ask_qwen2 import ask_qwen2
-from src.utils.config import PARSING_DIR
+from src.utils.config import (
+    DET_LIMIT_SIDE_LEN,
+    DET_LIMIT_TYPE,
+    IMAGE_PREPROCESSING_MODE,
+    PARSING_DIR,
+    PPSTRUCTURE_CPU_THREADS,
+    PPSTRUCTURE_DEVICE,
+    PPSTRUCTURE_ENABLE_HPI,
+    PPSTRUCTURE_ENABLE_MKLDNN,
+    PPSTRUCTURE_LANG,
+    PPSTRUCTURE_LAYOUT_MODEL_NAME,
+    PPSTRUCTURE_LAYOUT_NMS,
+    PPSTRUCTURE_LAYOUT_THRESHOLD,
+    PPSTRUCTURE_OCR_VERSION,
+    PPSTRUCTURE_PRECISION,
+    PPSTRUCTURE_TEXT_DET_BOX_THRESH,
+    PPSTRUCTURE_TEXT_DET_MODEL_NAME,
+    PPSTRUCTURE_TEXT_DET_THRESH,
+    PPSTRUCTURE_TEXT_DET_UNCLIP_RATIO,
+    PPSTRUCTURE_TEXT_REC_BATCH_SIZE,
+    PPSTRUCTURE_TEXT_REC_MODEL_NAME,
+    PPSTRUCTURE_TEXT_REC_SCORE_THRESH,
+    PPSTRUCTURE_USE_TABLE_RECOGNITION,
+    USE_PADDLEOCR_DOC_ORIENTATION,
+    USE_PADDLEOCR_DOC_UNWARPING,
+)
 from src.utils.df_utils import write_to_json
 from src.utils.logging_config import get_logger
 from src.utils.preprocess_image import preprocess_image
@@ -29,72 +50,180 @@ from src.utils.registry import register_parser
 logger = get_logger(__name__)
 
 
-def _load_images(image_path: Union[str, Path]) -> np.ndarray:
-    """Load image, apply preprocessing, and convert to numpy array.
+def _load_images(image_path: Path, preprocessing_mode: str) -> np.ndarray:
+    """Загрузка изображения с выбранным типом предобработки.
     
     Args:
-        image_path: Path to image file.
+        image_path: Путь к файлу изображения.
+        preprocessing_mode: Режим предобработки ("custom" или "paddleocr").
         
     Returns:
-        Numpy array of the preprocessed image.
+        np.ndarray: Загруженное изображение (предобработанное или исходное).
         
     Raises:
-        Exception: If image loading or preprocessing fails.
+        Exception: Если загрузка или предобработка не удались.
     """
     try:
-        logger.debug(f"Loading image: {image_path}")
+        logger.info(f"Загрузка изображения: {image_path}")
+        logger.debug(f"Режим предобработки: {preprocessing_mode}")
+
+        if preprocessing_mode == "custom":
+            # Режим "custom": применяем собственную предобработку
+            # PPStructureV3 будет инициализирован БЕЗ встроенной предобработки
+            preprocessed_image = preprocess_image(image_path, save_to_disk=True)
+            logger.info(f"Применена собственная предобработка. Размер: {preprocessed_image.shape}")
+            return preprocessed_image
         
-        # Apply preprocessing without saving to disk
-        preprocessed_image = preprocess_image(str(image_path), save_to_disk=False)
-        logger.debug(f"Image preprocessed successfully. Shape: {preprocessed_image.shape}")
+        elif preprocessing_mode == "paddleocr":
+            # Режим "paddleocr": загружаем исходное изображение БЕЗ предобработки
+            # PPStructureV3 будет инициализирован С встроенной предобработкой
+            image = cv2.imread(str(image_path))
+            if image is None:
+                raise FileNotFoundError(f"Не удалось загрузить изображение: {image_path}")
+            logger.info(f"Загружено исходное изображение для встроенной предобработки PaddleOCR. Размер: {image.shape}")
+            return image
         
-        return preprocessed_image
+        else:
+            logger.warning(f"Неизвестный режим предобработки: {preprocessing_mode}. Использую 'custom'")
+            preprocessed_image = preprocess_image(image_path, save_to_disk=True)
+            return preprocessed_image
+
     except Exception as e:
-        logger.error(f"Failed to load image {image_path}: {e}")
+        logger.error(f"Не удалось загрузить изображение {image_path}: {e}", exc_info=True)
         raise
 
 
 @register_parser(".jpg", ".jpeg", ".png")
-def image_ocr(image_path: Union[str, Path]) -> List[Path]:
-    """Perform OCR processing on image with table extraction.
+def image_ocr(image_path: Path) -> List[Path]:
+    """Выполнение OCR обработки изображения с извлечением таблиц.
     
     Args:
-        image_path: Path to image file.
+        image_path: Путь к файлу изображения.
         
     Returns:
-        List of paths to created JSON files with extracted tables.
+        Список путей к созданным JSON файлам с извлеченными таблицами.
         
     Raises:
-        Exception: If OCR processing fails.
+        Exception: Если OCR обработка не удалась.
     """
-    logger.info(f"Starting OCR processing for image: {image_path}")
-    
+    logger.info(f"Запуск OCR обработки изображения: {image_path}")
+
     try:
-        image = _load_images(image_path)
-        logger.info("Initializing PaddleOCR models...")
+        # Загрузка изображения с выбранным режимом предобработки
+        image = _load_images(image_path, IMAGE_PREPROCESSING_MODE)
         
-        #ocr_model = PaddleOCR(use_angle_cls=True, lang="ru")
-        table_engine = PPStructureV3(ocr_version="PP-OCRv5", lang="ru", device="cpu")
+        # Инициализация PPStructureV3 в зависимости от режима предобработки
+        logger.info("Инициализация моделей PaddleOCR...")
         
-        logger.info("Running table structure prediction...")
+        if IMAGE_PREPROCESSING_MODE == "paddleocr":
+            logger.info("Режим встроенной предобработки PaddleOCR")
+            
+            try:
+                table_engine = PPStructureV3(
+                    # Основные параметры (из конфига)
+                    ocr_version=PPSTRUCTURE_OCR_VERSION,
+                    lang=PPSTRUCTURE_LANG,
+                    device=PPSTRUCTURE_DEVICE,
+                    # Производительность (из конфига)
+                    enable_mkldnn=PPSTRUCTURE_ENABLE_MKLDNN,
+                    cpu_threads=PPSTRUCTURE_CPU_THREADS,
+                    enable_hpi=PPSTRUCTURE_ENABLE_HPI,
+                    precision=PPSTRUCTURE_PRECISION,
+                    # Layout detection (из конфига)
+                    layout_detection_model_name=PPSTRUCTURE_LAYOUT_MODEL_NAME,
+                    layout_threshold=PPSTRUCTURE_LAYOUT_THRESHOLD,
+                    layout_nms=PPSTRUCTURE_LAYOUT_NMS,
+                    # Встроенная предобработка документа (ВКЛЮЧЕНА для режима paddleocr)
+                    use_doc_orientation_classify=USE_PADDLEOCR_DOC_ORIENTATION,
+                    use_doc_unwarping=USE_PADDLEOCR_DOC_UNWARPING,
+                    # Text detection параметры (из конфига)
+                    text_detection_model_name=PPSTRUCTURE_TEXT_DET_MODEL_NAME,
+                    text_det_limit_side_len=DET_LIMIT_SIDE_LEN,
+                    text_det_limit_type=DET_LIMIT_TYPE,
+                    text_det_thresh=PPSTRUCTURE_TEXT_DET_THRESH,
+                    text_det_box_thresh=PPSTRUCTURE_TEXT_DET_BOX_THRESH,
+                    text_det_unclip_ratio=PPSTRUCTURE_TEXT_DET_UNCLIP_RATIO,
+                    # Text recognition параметры (из конфига)
+                    text_recognition_model_name=PPSTRUCTURE_TEXT_REC_MODEL_NAME,
+                    text_recognition_batch_size=PPSTRUCTURE_TEXT_REC_BATCH_SIZE,
+                    text_rec_score_thresh=PPSTRUCTURE_TEXT_REC_SCORE_THRESH,
+                    use_textline_orientation=True,
+                    # Table recognition (из конфига)
+                    use_table_recognition=PPSTRUCTURE_USE_TABLE_RECOGNITION
+                )
+                logger.info("PPStructureV3 инициализирован с встроенной предобработкой PaddleOCR")
+                
+            except Exception as init_error:
+                logger.error(
+                    f"Ошибка инициализации PPStructureV3 (режим paddleocr): {init_error}", 
+                    exc_info=True
+                )
+                raise
+                
+        else:
+            logger.info("Режим собственной предобработки (встроенная предобработка PaddleOCR отключена)")
+            
+            try:
+                table_engine = PPStructureV3(
+                    # Основные параметры (из конфига)
+                    ocr_version=PPSTRUCTURE_OCR_VERSION,
+                    lang=PPSTRUCTURE_LANG,
+                    device=PPSTRUCTURE_DEVICE,
+                    # Производительность (из конфига)
+                    enable_mkldnn=PPSTRUCTURE_ENABLE_MKLDNN,
+                    cpu_threads=PPSTRUCTURE_CPU_THREADS,
+                    enable_hpi=PPSTRUCTURE_ENABLE_HPI,
+                    precision=PPSTRUCTURE_PRECISION,
+                    # Layout detection (из конфига)
+                    layout_detection_model_name=PPSTRUCTURE_LAYOUT_MODEL_NAME,
+                    layout_threshold=PPSTRUCTURE_LAYOUT_THRESHOLD,
+                    layout_nms=PPSTRUCTURE_LAYOUT_NMS,
+                    # Встроенная предобработка ОТКЛЮЧЕНА (собственная уже применена)
+                    use_doc_orientation_classify=False,
+                    use_doc_unwarping=False,
+                    # Text detection параметры (из конфига)
+                    text_detection_model_name=PPSTRUCTURE_TEXT_DET_MODEL_NAME,
+                    text_det_limit_side_len=DET_LIMIT_SIDE_LEN,
+                    text_det_limit_type=DET_LIMIT_TYPE,
+                    text_det_thresh=PPSTRUCTURE_TEXT_DET_THRESH,
+                    text_det_box_thresh=PPSTRUCTURE_TEXT_DET_BOX_THRESH,
+                    text_det_unclip_ratio=PPSTRUCTURE_TEXT_DET_UNCLIP_RATIO,
+                    # Text recognition параметры (из конфига)
+                    text_recognition_model_name=PPSTRUCTURE_TEXT_REC_MODEL_NAME,
+                    text_recognition_batch_size=PPSTRUCTURE_TEXT_REC_BATCH_SIZE,
+                    text_rec_score_thresh=PPSTRUCTURE_TEXT_REC_SCORE_THRESH,
+                    use_textline_orientation=False,
+                    # Table recognition (из конфига)
+                    use_table_recognition=PPSTRUCTURE_USE_TABLE_RECOGNITION
+                )
+                logger.info("PPStructureV3 инициализирован без встроенной предобработки (используется собственная)")
+                
+            except Exception as init_error:
+                logger.error(
+                    f"Ошибка инициализации PPStructureV3 (режим custom): {init_error}", 
+                    exc_info=True
+                )
+                raise
+
+        logger.info("Выполнение предсказания структуры таблицы...")
         results = table_engine.predict(image)
-        
+
         files = []
         for i, r in enumerate(results):
-            logger.info(f"Processing result {i}: found {len(r.get('parsing_res_list', []))} elements")
-            
+            logger.info(f"Обработка результата {i}: найдено {len(r.get('parsing_res_list', []))} элементов")
+
             for item in r['parsing_res_list']:
                 if item.label == 'table':
                     html = item.content
-                    logger.debug(f"Found table HTML content: {len(html)} characters")
-                    
+                    logger.debug(f"Найдено HTML содержимое таблицы: {len(html)} символов")
+
                     try:
                         dfs = pd.read_html(StringIO(html))
                         if dfs:
                             df = dfs[0]
-                            logger.info(f"Extracted table with shape: {df.shape}")
-                            
-                            # Save as JSON file with header detection and generation
+                            logger.info(f"Извлечена таблица размером: {df.shape}")
+
+                            # Сохранение как JSON файл с определением и генерацией заголовков
                             json_file_path = PARSING_DIR / f"table_{i}.json"
                             write_to_json(
                                 json_file_path,
@@ -103,111 +232,19 @@ def image_ocr(image_path: Union[str, Path]) -> List[Path]:
                                 temp_dir=PARSING_DIR
                             )
                             files.append(json_file_path)
-                            logger.info(f"Table saved as JSON: {json_file_path}")
+                            logger.info(f"Таблица сохранена как JSON: {json_file_path}")
                         else:
-                            logger.warning(f"No dataframes extracted from HTML in result {i}")
+                            logger.warning(f"Не извлечено dataframes из HTML в результате {i}")
                     except Exception as e:
-                        logger.error(f"Error processing HTML table in result {i}: {e}")
+                        logger.error(f"Ошибка обработки HTML таблицы в результате {i}: {e}")
                         continue
                 else:
-                    logger.debug(f"Skipping non-table element: {item.label}")
-        
-        logger.info(f"OCR processing completed. Created {len(files)} files")
+                    logger.debug(f"Пропуск не-табличного элемента: {item.label}")
+
+        logger.info(f"OCR обработка завершена. Создано {len(files)} файлов")
         return files
-        
+
     except Exception as e:
-        logger.error(f"Error in OCR processing for {image_path}: {e}")
+        logger.error(f"Ошибка при OCR обработке {image_path}: {e}", exc_info=True)
+        logger.debug(f"Тип ошибки: {type(e).__name__}")
         return []
-
-
-def _extract_table(answer: str) -> Optional[List]:
-    """Extract table data from AI response text.
-    
-    Args:
-        answer: Text response from AI model.
-        
-    Returns:
-        List representation of table data or None.
-        
-    Raises:
-        Exception: If parsing fails.
-    """
-    logger.debug(f"Extracting table from answer with {len(answer)} characters")
-    
-    match = re.search(r"\[.*\]", answer, re.S)
-    if match:
-        try:
-            table_data = ast.literal_eval(match.group(0))
-            logger.info(f"Successfully extracted table with {len(table_data)} rows")
-            return table_data
-        except Exception as e:
-            logger.warning(f"Failed to parse table data: {e}")
-            return None
-    
-    logger.warning("No table pattern found in AI response")
-    return None
-
-
-
-def parse_images_ai(image_path: Union[str, Path]) -> Optional[str]:
-    """Process image using AI model for table extraction.
-    
-    Args:
-        image_path: Path to image file.
-        
-    Returns:
-        Filename of processed JSON file or None.
-        
-    Raises:
-        Exception: If AI processing fails.
-    """
-    logger.info(f"Starting AI-based image processing for: {image_path}")
-    
-    try:
-        image = _load_images(image_path)
-        image = preprocess_image(image_path, image)
-        
-        prompt = """
-        Ты — распознаватель таблиц. 
-        Нужно извлечь все строки и все столбцы таблицы.
-        Формат ответа:
-        - Строго список списков (Python-подобный массив).
-        - Каждый вложенный список = одна строка таблицы.
-        - Первый вложенный список = заголовки (если они есть).
-        - Остальные вложенные списки = все строки таблицы по порядку.
-        - В каждой строке должно быть одинаковое количество элементов (как в таблице).
-        - Не добавляй пояснений, текста или комментариев вне списка.
-        - Тип данных в одном столбце должен быть одинаковый для всех строк.
-        
-        Пример правильного ответа:
-        [["Колонка1", "Колонка2"],
-         ["Значение1", "Значение2"]]
-        """
-        
-        logger.info("Sending image to AI model for processing...")
-        answer = ask_qwen2(image_path=image, prompt=prompt)
-        
-        if answer:
-            logger.info(f"AI response received: {len(answer)} characters")
-            logger.debug(f"AI response preview: {answer[:200]}...")
-        else:
-            logger.warning("No response received from AI model")
-            return None
-        
-        data = _extract_table(answer)
-        if data:
-            logger.info(f"Extracted data: {len(data)} rows")
-        else:
-            logger.warning("No table data extracted from AI response")
-            return None
-        
-        file_name = f"{Path(image_path).stem}.json"
-        out_path = PARSING_DIR / file_name
-        write_to_json(out_path, data)
-        
-        logger.info(f"AI processing completed. Saved to: {out_path}")
-        return file_name
-        
-    except Exception as e:
-        logger.error(f"Error in AI image processing for {image_path}: {e}")
-        return None

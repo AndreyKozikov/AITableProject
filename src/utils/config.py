@@ -70,5 +70,154 @@ PROMPT_TEMPLATE_SO = """
 {tables_text}  
 """
 
+# Image Preprocessing Constants
+# Константы для предобработки изображений
+
+# Коррекция перспективы: порог отклонения углов от 90 градусов (в градусах)
+# Если все углы документа отклоняются меньше этого значения, коррекция не применяется
+PERSPECTIVE_ANGLE_THRESHOLD = 10.0
+
+# Контрастирование CLAHE: предел обрезки для адаптивного выравнивания гистограммы
+# Более высокие значения увеличивают контраст
+CLAHE_CLIP_LIMIT = 2.0
+
+# Контрастирование CLAHE: размер сетки для локальной обработки (ширина, высота)
+CLAHE_TILE_GRID_SIZE = (8, 8)
+
+# Шумоподавление: параметр силы фильтрации
+# Большие значения убирают больше шума, но могут размыть детали
+DENOISE_STRENGTH = 10
+
+# Выравнивание наклона: максимальный угол поиска наклона (в градусах)
+DESKEW_MAX_ANGLE = 12
+
+# Выравнивание наклона: минимальный порог для применения коррекции (в градусах)
+# Если угол наклона меньше этого значения, коррекция не применяется
+DESKEW_MIN_ANGLE_THRESHOLD = 0.5
+
+# PaddleOCR параметры разрешения для table detection
+# Рекомендуемое значение для распознавания таблиц: 736
+# Для текстового OCR по умолчанию используется 960
+DET_LIMIT_SIDE_LEN = 736
+
+# Тип ограничения стороны изображения: 'min' или 'max'
+# 'min' - минимальная сторона изображения не будет меньше DET_LIMIT_SIDE_LEN
+# 'max' - максимальная сторона изображения не будет больше DET_LIMIT_SIDE_LEN
+DET_LIMIT_TYPE = 'min'
+
+# ==================== НАСТРОЙКИ ПРЕДОБРАБОТКИ ИЗОБРАЖЕНИЙ ====================
+#
+# Выбор типа предобработки изображений для OCR
+# 
+# Доступные режимы:
+# 
+# "custom" (по умолчанию) - Собственная предобработка из preprocess_image.py
+#   Применяется: preprocess_image() перед передачей в PaddleOCR
+#   PPStructureV3 инициализируется без встроенной предобработки
+#   Этапы обработки:
+#     ✓ Преобразование в оттенки серого
+#     ✓ Коррекция перспективы (perspective correction)
+#     ✓ Выравнивание наклона (deskew)
+#     ✓ Масштабирование до оптимального размера (resize для OCR)
+#     ✓ Шумоподавление (denoise)
+#     ✓ Повышение резкости (sharpen)
+#     ✓ Улучшение контраста (CLAHE)
+#     ✓ Опционально: бинаризация (binarization)
+#   Рекомендуется для: сканированных документов, фото документов
+#
+# "paddleocr" - Встроенная предобработка PaddleOCR
+#   Применяется: исходное изображение загружается и передается в PaddleOCR
+#   PPStructureV3 инициализируется с модулями предобработки:
+#     ✓ use_doc_orientation_classify (классификация ориентации 0°, 90°, 180°, 270°)
+#     ✓ use_doc_unwarping (исправление геометрических искажений UVDoc)
+#   ВНИМАНИЕ: doc_unwarping требует: pip install shapely pyclipper
+#   Рекомендуется для: документов с неправильной ориентацией, сильными искажениями
+#
+#IMAGE_PREPROCESSING_MODE = "paddleocr"
+IMAGE_PREPROCESSING_MODE = "custom"
+
+# Параметры для режима IMAGE_PREPROCESSING_MODE = "paddleocr"
+# (игнорируются при режиме "custom")
+
+# Использовать классификацию ориентации документа (0°, 90°, 180°, 270°)
+# True - автоматически определять и исправлять ориентацию
+# False - предполагать, что документ уже правильно ориентирован
+USE_PADDLEOCR_DOC_ORIENTATION = False
+
+# Использовать исправление геометрических искажений документа (UVDoc модель)
+# True - исправлять искажения, деформации, кривизну документа
+# False - не исправлять геометрические искажения
+# ВНИМАНИЕ: требует установки дополнительных зависимостей
+#   pip install shapely pyclipper
+USE_PADDLEOCR_DOC_UNWARPING = False
+
+# ==============================================================================
+
+# ==================== ПАРАМЕТРЫ PPStructureV3 ДЛЯ TABLE RECOGNITION ====================
+#
+# Общие параметры для инициализации PPStructureV3 при распознавании таблиц
+# Эти параметры используются в обоих режимах предобработки ("custom" и "paddleocr")
+
+# ---------- Основные параметры ----------
+PPSTRUCTURE_OCR_VERSION = "PP-OCRv5"  # Версия OCR моделей (последняя версия)
+PPSTRUCTURE_LANG = "ru"  # Язык: автоматически использует eslav_PP-OCRv5_mobile_rec
+                         # Поддерживает: русский + английский + цифры
+PPSTRUCTURE_DEVICE = "cpu"  # Устройство: "cpu", "gpu:0", "gpu:1", и т.д.
+
+# ---------- Производительность ----------
+PPSTRUCTURE_ENABLE_MKLDNN = True  # MKL-DNN ускорение для CPU (Intel оптимизация)
+PPSTRUCTURE_CPU_THREADS = 8  # Количество потоков CPU для инференса
+PPSTRUCTURE_ENABLE_HPI = False  # High-Performance Inference (требует установки плагина)
+PPSTRUCTURE_PRECISION = "fp32"  # Точность вычислений: "fp32", "fp16", "int8"
+
+# ---------- Layout Detection ----------
+#PPSTRUCTURE_TEXT_DET_MODEL_NAME = "PicoDet-L_layout_3cls"
+PPSTRUCTURE_LAYOUT_MODEL_NAME = "RT-DETR-H_layout_3cls"  # Модель для обнаружения макета
+                                                         # RT-DETR-H - высокая точность
+                                                         # 3cls: table, image, stamp
+PPSTRUCTURE_LAYOUT_THRESHOLD = 0.6  # Порог уверенности для layout detection (0.0-1.0)
+PPSTRUCTURE_LAYOUT_NMS = False  # Non-Maximum Suppression для удаления дублирующих boxes
+
+# ---------- Text Detection (обнаружение текста) ----------
+PPSTRUCTURE_TEXT_DET_MODEL_NAME = "PP-OCRv5_server_det"  # Модель детекции текста
+                                                         # server - высокая точность
+                                                         # mobile - быстрее для CPU
+PPSTRUCTURE_TEXT_DET_THRESH = 0.25  # Порог для пикселей текста в probability map
+PPSTRUCTURE_TEXT_DET_BOX_THRESH = 0.4  # Порог для текстовых областей (bounding boxes)
+PPSTRUCTURE_TEXT_DET_UNCLIP_RATIO = 1.0  # Коэффициент расширения bounding boxes
+                                         # 1.0-1.5: для таблиц (больше разделения слов)
+                                         # 1.5-2.0: для обычного текста (меньше разделения)
+                                         # Влияет на распознавание ПРОБЕЛОВ между словами!
+
+# ---------- Text Recognition (распознавание текста) ----------
+PPSTRUCTURE_TEXT_REC_MODEL_NAME = "eslav_PP-OCRv5_mobile_rec"  # Модель распознавания текста
+                                                               # eslav - East Slavic (русский + английский)
+                                                               # КРИТИЧНО для правильных пробелов!
+PPSTRUCTURE_TEXT_REC_BATCH_SIZE = 1  # Размер батча для распознавания (1 для CPU)
+PPSTRUCTURE_TEXT_REC_SCORE_THRESH = 0.4  # Минимальный порог уверенности для результатов
+                                         # 0.0 - без фильтрации
+                                         # 0.5-0.7 - фильтр ненадежных результатов
+
+# ---------- Table Recognition ----------
+PPSTRUCTURE_USE_TABLE_RECOGNITION = True  # Включить модуль распознавания таблиц
+
+# ==============================================================================
+
+# Бинаризация: применять ли бинаризацию Оцу для повышения контраста текста
+# Полезно для документов с низким контрастом
+APPLY_BINARIZATION = True
+
+# Инверсия: применять ли инверсию цветов (полезно для негативных изображений)
+APPLY_INVERSION = False
+
+# Повышение резкости: применять ли фильтр повышения резкости
+APPLY_SHARPENING = True
+
+# Параметры повышения резкости (kernel для unsharp mask)
+SHARPEN_KERNEL_SIZE = (5, 5)
+SHARPEN_SIGMA = 1.0
+SHARPEN_AMOUNT = 1.5
+SHARPEN_THRESHOLD = 0
+
 for d in (INBOX_DIR, PARSING_DIR, OUT_DIR):
     d.mkdir(exist_ok=True)

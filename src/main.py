@@ -13,16 +13,16 @@ from pathlib import Path
 from src.utils.logging_config import configure_logging, get_logger
 from src.utils.config import INBOX_DIR, PARSING_DIR
 
-# Инициализация логирования
+# Инициализация логирования из config/logging_config.json
 configure_logging()
 logger = get_logger(__name__)
 
 
 def clean_directories() -> None:
-    """Clean all files from inbox and parsing directories.
+    """Очистка всех файлов из директорий inbox и parsing.
     
-    Removes all files from INBOX_DIR and PARSING_DIR to prepare
-    for new processing session.
+    Удаляет все файлы из INBOX_DIR и PARSING_DIR для подготовки
+    к новой сессии обработки.
     """
     try:
         # Очистка директории inbox
@@ -33,16 +33,16 @@ def clean_directories() -> None:
                     try:
                         file_path.unlink()
                         deleted_count += 1
-                        logger.debug(f"Deleted from inbox: {file_path.name}")
+                        logger.debug(f"Удален из inbox: {file_path.name}")
                     except Exception as e:
-                        logger.warning(f"Failed to delete {file_path.name}: {e}")
+                        logger.warning(f"Не удалось удалить {file_path.name}: {e}")
             
             if deleted_count > 0:
-                logger.info(f"Cleaned inbox directory: {deleted_count} files deleted")
+                logger.info(f"Очищена директория inbox: удалено {deleted_count} файлов")
             else:
-                logger.debug("Inbox directory is empty")
+                logger.debug("Директория inbox пуста")
         else:
-            logger.warning(f"Inbox directory does not exist: {INBOX_DIR}")
+            logger.warning(f"Директория inbox не существует: {INBOX_DIR}")
         
         # Очистка директории parsing_files
         if PARSING_DIR.exists():
@@ -52,59 +52,59 @@ def clean_directories() -> None:
                     try:
                         file_path.unlink()
                         deleted_count += 1
-                        logger.debug(f"Deleted from parsing_files: {file_path.name}")
+                        logger.debug(f"Удален из parsing_files: {file_path.name}")
                     except Exception as e:
-                        logger.warning(f"Failed to delete {file_path.name}: {e}")
+                        logger.warning(f"Не удалось удалить {file_path.name}: {e}")
             
             if deleted_count > 0:
-                logger.info(f"Cleaned parsing_files directory: {deleted_count} files deleted")
+                logger.info(f"Очищена директория parsing_files: удалено {deleted_count} файлов")
             else:
-                logger.debug("Parsing_files directory is empty")
+                logger.debug("Директория parsing_files пуста")
         else:
-            logger.warning(f"Parsing directory does not exist: {PARSING_DIR}")
+            logger.warning(f"Директория parsing не существует: {PARSING_DIR}")
             
     except Exception as e:
-        logger.error(f"Error during directory cleanup: {e}")
+        logger.error(f"Ошибка при очистке директорий: {e}")
 
 
 def main() -> None:
-    """Main application function.
+    """Главная функция приложения.
     
-    Sets up Python path and launches Streamlit application.
+    Настраивает Python path и запускает Streamlit приложение.
     
     Raises:
-        SystemExit: On critical startup error.
+        SystemExit: При критической ошибке запуска.
     """
     try:
-        logger.info("Starting AITableProject application...")
+        logger.info("Запуск приложения AITableProject...")
         
-        # Clean directories before starting
-        logger.info("Cleaning directories...")
+        # Очистка директорий перед запуском
+        logger.info("Очистка директорий...")
         clean_directories()
-        
-        # Add src path to Python path
+
+        # Добавление пути src в Python path
         src_path = Path(__file__).parent
         if str(src_path) not in sys.path:
             sys.path.insert(0, str(src_path))
-            logger.info(f"Added to sys.path: {src_path}")
+            logger.info(f"Добавлено в sys.path: {src_path}")
             
-        # Launch Streamlit application
+        # Запуск Streamlit приложения
         app_path = src_path / "app" / "enhanced_app.py"
-        logger.info(f"Launching Streamlit app: {app_path}")
+        logger.info(f"Запуск Streamlit приложения: {app_path}")
         
         subprocess.run(["streamlit", "run", str(app_path)], check=True)
         
     except FileNotFoundError:
-        logger.error("Streamlit not found. Install: pip install streamlit")
+        logger.error("Streamlit не найден. Установите: pip install streamlit")
         sys.exit(1)
     except subprocess.CalledProcessError as e:
-        logger.error(f"Error launching Streamlit: {e}")
+        logger.error(f"Ошибка запуска Streamlit: {e}")
         sys.exit(1)
     except KeyboardInterrupt:
-        logger.info("Application stopped by user")
+        logger.info("Приложение остановлено пользователем")
         sys.exit(0)
     except Exception as e:
-        logger.critical(f"Unexpected error: {e}")
+        logger.critical(f"Неожиданная ошибка: {e}")
         sys.exit(1)
 
 
