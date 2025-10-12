@@ -41,56 +41,13 @@ from src.utils.config import (
     USE_PADDLEOCR_DOC_ORIENTATION,
     USE_PADDLEOCR_DOC_UNWARPING,
 )
-from src.utils.df_utils import write_to_json
+from src.utils.df_utils import write_to_json, clean_dataframe
+from src.utils.image_preprocessor import ImagePreprocessor
 from src.utils.logging_config import get_logger
-from src.utils.preprocess_image import preprocess_image
 from src.utils.registry import register_parser
 
 # Получение настроенного логгера
 logger = get_logger(__name__)
-
-
-def _load_images(image_path: Path, preprocessing_mode: str) -> np.ndarray:
-    """Загрузка изображения с выбранным типом предобработки.
-    
-    Args:
-        image_path: Путь к файлу изображения.
-        preprocessing_mode: Режим предобработки ("custom" или "paddleocr").
-        
-    Returns:
-        np.ndarray: Загруженное изображение (предобработанное или исходное).
-        
-    Raises:
-        Exception: Если загрузка или предобработка не удались.
-    """
-    try:
-        logger.info(f"Загрузка изображения: {image_path}")
-        logger.debug(f"Режим предобработки: {preprocessing_mode}")
-
-        if preprocessing_mode == "custom":
-            # Режим "custom": применяем собственную предобработку
-            # PPStructureV3 будет инициализирован БЕЗ встроенной предобработки
-            preprocessed_image = preprocess_image(image_path, save_to_disk=True)
-            logger.info(f"Применена собственная предобработка. Размер: {preprocessed_image.shape}")
-            return preprocessed_image
-        
-        elif preprocessing_mode == "paddleocr":
-            # Режим "paddleocr": загружаем исходное изображение БЕЗ предобработки
-            # PPStructureV3 будет инициализирован С встроенной предобработкой
-            image = cv2.imread(str(image_path))
-            if image is None:
-                raise FileNotFoundError(f"Не удалось загрузить изображение: {image_path}")
-            logger.info(f"Загружено исходное изображение для встроенной предобработки PaddleOCR. Размер: {image.shape}")
-            return image
-        
-        else:
-            logger.warning(f"Неизвестный режим предобработки: {preprocessing_mode}. Использую 'custom'")
-            preprocessed_image = preprocess_image(image_path, save_to_disk=True)
-            return preprocessed_image
-
-    except Exception as e:
-        logger.error(f"Не удалось загрузить изображение {image_path}: {e}", exc_info=True)
-        raise
 
 
 @register_parser(".jpg", ".jpeg", ".png")
@@ -106,11 +63,13 @@ def image_ocr(image_path: Path) -> List[Path]:
     Raises:
         Exception: Если OCR обработка не удалась.
     """
+
+    image_preprocessor = ImagePreprocessor()
+
+
     logger.info(f"Запуск OCR обработки изображения: {image_path}")
 
     try:
-        # Загрузка изображения с выбранным режимом предобработки
-        image = _load_images(image_path, IMAGE_PREPROCESSING_MODE)
         
         # Инициализация PPStructureV3 в зависимости от режима предобработки
         logger.info("Инициализация моделей PaddleOCR...")
@@ -119,6 +78,9 @@ def image_ocr(image_path: Path) -> List[Path]:
             logger.info("Режим встроенной предобработки PaddleOCR")
             
             try:
+                image = image_preprocessor.load_image(image_path)
+                image = image_preprocessor.resize_for_ocr(image)
+
                 table_engine = PPStructureV3(
                     # Основные параметры (из конфига)
                     ocr_version=PPSTRUCTURE_OCR_VERSION,
@@ -130,11 +92,11 @@ def image_ocr(image_path: Path) -> List[Path]:
                     enable_hpi=PPSTRUCTURE_ENABLE_HPI,
                     precision=PPSTRUCTURE_PRECISION,
                     # Layout detection (из конфига)
-                    layout_detection_model_name=PPSTRUCTURE_LAYOUT_MODEL_NAME,
+                    #layout_detection_model_name=PPSTRUCTURE_LAYOUT_MODEL_NAME,
                     layout_threshold=PPSTRUCTURE_LAYOUT_THRESHOLD,
                     layout_nms=PPSTRUCTURE_LAYOUT_NMS,
                     # Встроенная предобработка документа (ВКЛЮЧЕНА для режима paddleocr)
-                    use_doc_orientation_classify=USE_PADDLEOCR_DOC_ORIENTATION,
+                    #use_doc_orientation_classify=USE_PADDLEOCR_DOC_ORIENTATION,
                     use_doc_unwarping=USE_PADDLEOCR_DOC_UNWARPING,
                     # Text detection параметры (из конфига)
                     text_detection_model_name=PPSTRUCTURE_TEXT_DET_MODEL_NAME,
@@ -147,7 +109,7 @@ def image_ocr(image_path: Path) -> List[Path]:
                     text_recognition_model_name=PPSTRUCTURE_TEXT_REC_MODEL_NAME,
                     text_recognition_batch_size=PPSTRUCTURE_TEXT_REC_BATCH_SIZE,
                     text_rec_score_thresh=PPSTRUCTURE_TEXT_REC_SCORE_THRESH,
-                    use_textline_orientation=True,
+                    #use_textline_orientation=True,
                     # Table recognition (из конфига)
                     use_table_recognition=PPSTRUCTURE_USE_TABLE_RECOGNITION
                 )
@@ -164,6 +126,7 @@ def image_ocr(image_path: Path) -> List[Path]:
             logger.info("Режим собственной предобработки (встроенная предобработка PaddleOCR отключена)")
             
             try:
+                image = image_preprocessor.run(image_path)
                 table_engine = PPStructureV3(
                     # Основные параметры (из конфига)
                     ocr_version=PPSTRUCTURE_OCR_VERSION,
@@ -207,6 +170,9 @@ def image_ocr(image_path: Path) -> List[Path]:
 
         logger.info("Выполнение предсказания структуры таблицы...")
         results = table_engine.predict(image)
+        for res in results:
+            res.save_to_json(save_path=str(PARSING_DIR))
+            res.save_to_img(save_path=str(PARSING_DIR))
 
         files = []
         for i, r in enumerate(results):
@@ -222,12 +188,12 @@ def image_ocr(image_path: Path) -> List[Path]:
                         if dfs:
                             df = dfs[0]
                             logger.info(f"Извлечена таблица размером: {df.shape}")
-
+                            df_clean = clean_dataframe(df)
                             # Сохранение как JSON файл с определением и генерацией заголовков
-                            json_file_path = PARSING_DIR / f"table_{i}.json"
+                            json_file_path = PARSING_DIR / f"{image_path.stem}_table_{i}.json"
                             write_to_json(
                                 json_file_path,
-                                df,
+                                df_clean,
                                 detect_headers=True,
                                 temp_dir=PARSING_DIR
                             )

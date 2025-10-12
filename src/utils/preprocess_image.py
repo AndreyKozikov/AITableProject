@@ -8,6 +8,7 @@ from src.utils.config import (
     APPLY_SHARPENING,
     CLAHE_CLIP_LIMIT,
     CLAHE_TILE_GRID_SIZE,
+    DEBUG_LOCAL_CORRECTIONS,
     DENOISE_STRENGTH,
     DESKEW_MAX_ANGLE,
     DESKEW_MIN_ANGLE_THRESHOLD,
@@ -43,13 +44,16 @@ def _correct_perspective(image: np.ndarray, angle_threshold: float = PERSPECTIVE
     else:
         gray = image.copy()
 
+    # Усиление контраста для улучшения видимости верхней границы документа
+    gray = cv2.equalizeHist(gray)
+
     # Улучшенное выделение границ для документов со слабым контрастом
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
     edges = cv2.Canny(blurred, 50, 150)
     dilated = cv2.dilate(edges, np.ones((3, 3), np.uint8), iterations=2)
     
     contours, _ = cv2.findContours(
-        dilated, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
+        dilated, cv2.RETR_LIST, cv2.CHAIN_APPROX_SIMPLE
     )
 
     if not contours:
@@ -59,11 +63,18 @@ def _correct_perspective(image: np.ndarray, angle_threshold: float = PERSPECTIVE
     perimeter = cv2.arcLength(document_contour, True)
     approx = cv2.approxPolyDP(document_contour, 0.02 * perimeter, True)
 
+    # Если контур найден не полностью, используем выпуклую оболочку для восстановления формы
+    if len(approx) < 4:
+        hull = cv2.convexHull(document_contour)
+        rect = cv2.minAreaRect(hull)
+        box = cv2.boxPoints(rect)
+        approx = box.astype(int)
+    
     # Резервный метод определения углов через minAreaRect
     if len(approx) != 4:
         rect = cv2.minAreaRect(document_contour)
         box = cv2.boxPoints(rect)
-        approx = np.int0(box)
+        approx = box.astype(int)
 
     points = approx.reshape(4, 2).astype(np.float32)
 
@@ -287,6 +298,165 @@ def _invert_image(img: np.ndarray) -> np.ndarray:
     return cv2.bitwise_not(img)
 
 
+def _correct_local_distortions(img: np.ndarray, angle_threshold: float = PERSPECTIVE_ANGLE_THRESHOLD) -> np.ndarray:
+    """
+    Второй проход коррекции перспективы — локально для искажённых областей.
+    
+    Находит крупные контуры на изображении и проверяет их прямоугольность.
+    Если углы отклоняются от 90° больше порогового значения,
+    применяет локальную коррекцию перспективы к этой области.
+    
+    Оптимизации:
+    - Морфологическая обработка для надёжности поиска контуров
+    - Фильтрация по соотношению сторон (игнорирование слишком узких/вытянутых областей)
+    - Обработка только 5 крупнейших контуров при большом количестве
+    - Масштабирование ROI если размеры изменились после коррекции
+    - Отладочная визуализация (при DEBUG_LOCAL_CORRECTIONS = True)
+    
+    Args:
+        img: Входное изображение в градациях серого.
+        angle_threshold: Порог отклонения углов от 90 градусов.
+    
+    Returns:
+        np.ndarray: Изображение с исправленными локальными искажениями.
+    """
+    # Создаем копию для работы
+    result = img.copy()
+    
+    # Бинаризация для поиска контуров
+    _, binary = cv2.threshold(img, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+    
+    # Добавляем выделение горизонтальных линий для улучшения коррекции верхней части таблицы
+    horizontal = cv2.Sobel(binary, cv2.CV_8U, 1, 0, ksize=3)
+    horizontal = cv2.morphologyEx(horizontal, cv2.MORPH_CLOSE, np.ones((25, 1), np.uint8), iterations=2)
+    binary = cv2.bitwise_or(binary, horizontal)
+    
+    # Морфологическая обработка для улучшения качества контуров
+    # Замыкание пробелов и устранение шума
+    binary = cv2.morphologyEx(binary, cv2.MORPH_CLOSE, np.ones((5, 5), np.uint8), iterations=2)
+    
+    # Находим контуры
+    contours, _ = cv2.findContours(binary, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    
+    if not contours:
+        return result
+    
+    # Вычисляем минимальную площадь для фильтрации мелких контуров
+    # Берем только контуры, занимающие хотя бы 5% от площади изображения
+    img_area = img.shape[0] * img.shape[1]
+    min_area = img_area * 0.05
+    
+    # Ускорение: если контуров больше 10, обрабатываем только 5 крупнейших
+    if len(contours) > 10:
+        # Сортируем контуры по площади в убывающем порядке
+        contours = sorted(contours, key=cv2.contourArea, reverse=True)[:5]
+    
+    def calculate_angle(p1, p2, p3):
+        """Вычисляет угол между векторами p1->p2 и p2->p3"""
+        v1 = p1 - p2
+        v2 = p3 - p2
+        cos_angle = np.dot(v1, v2) / (np.linalg.norm(v1) * np.linalg.norm(v2) + 1e-10)
+        cos_angle = np.clip(cos_angle, -1.0, 1.0)
+        angle = np.arccos(cos_angle) * 180.0 / np.pi
+        return angle
+    
+    # Счетчик исправленных областей для отладки
+    corrected_count = 0
+    
+    # Обрабатываем каждый крупный контур
+    for contour in contours:
+        area = cv2.contourArea(contour)
+        
+        # Фильтруем мелкие контуры
+        if area < min_area:
+            continue
+        
+        # Получаем ограничивающий прямоугольник для проверки соотношения сторон
+        x_temp, y_temp, w_temp, h_temp = cv2.boundingRect(contour)
+        
+        # Фильтр по соотношению сторон (игнорирование слишком узких/вытянутых областей)
+        aspect_ratio = w_temp / float(h_temp)
+        if aspect_ratio < 0.3 or aspect_ratio > 3.5:
+            continue
+        
+        # Аппроксимируем контур
+        perimeter = cv2.arcLength(contour, True)
+        approx = cv2.approxPolyDP(contour, 0.02 * perimeter, True)
+        
+        # Пытаемся получить 4 угла
+        if len(approx) != 4:
+            # Используем minAreaRect как резервный метод
+            rect = cv2.minAreaRect(contour)
+            box = cv2.boxPoints(rect)
+            approx = box.astype(int)
+        
+        if len(approx) != 4:
+            continue
+        
+        # Проверяем прямоугольность
+        points = approx.reshape(4, 2).astype(np.float32)
+        
+        # Упорядочиваем точки
+        s = points.sum(axis=1)
+        diff = np.diff(points, axis=1).flatten()
+        
+        top_left = points[np.argmin(s)]
+        bottom_right = points[np.argmax(s)]
+        top_right = points[np.argmin(diff)]
+        bottom_left = points[np.argmax(diff)]
+        
+        ordered_points = [top_left, top_right, bottom_right, bottom_left]
+        
+        # Вычисляем все углы
+        angles = []
+        for i in range(4):
+            p1 = ordered_points[i]
+            p2 = ordered_points[(i + 1) % 4]
+            p3 = ordered_points[(i + 2) % 4]
+            angle = calculate_angle(p1, p2, p3)
+            angles.append(angle)
+        
+        # Проверяем отклонение от 90 градусов
+        angle_deviations = [abs(angle - 90.0) for angle in angles]
+        max_deviation = max(angle_deviations)
+        
+        # Если отклонение превышает порог, применяем локальную коррекцию
+        if max_deviation >= angle_threshold:
+            # Получаем ограничивающий прямоугольник ROI
+            x, y, w, h = cv2.boundingRect(contour)
+            
+            # Добавляем небольшой отступ для безопасности
+            padding = 5
+            x = max(0, x - padding)
+            y = max(0, y - padding)
+            w = min(img.shape[1] - x, w + 2 * padding)
+            h = min(img.shape[0] - y, h + 2 * padding)
+            
+            # Сохраняем исходные размеры ROI
+            original_roi_h, original_roi_w = h, w
+            
+            # Извлекаем ROI
+            roi = result[y:y+h, x:x+w].copy()
+            
+            # Применяем коррекцию перспективы к ROI
+            roi_fixed = _correct_perspective(roi, angle_threshold)
+            
+            # Если размеры изменились после коррекции, масштабируем обратно
+            if roi_fixed.shape != roi.shape:
+                roi_fixed = cv2.resize(roi_fixed, (original_roi_w, original_roi_h), 
+                                      interpolation=cv2.INTER_LINEAR)
+            
+            # Вставляем исправленную область обратно
+            result[y:y+h, x:x+w] = roi_fixed
+            corrected_count += 1
+            
+            # Отладочная визуализация
+            if DEBUG_LOCAL_CORRECTIONS:
+                cv2.rectangle(result, (x, y), (x+w, y+h), (255, 255, 255), 2)
+    
+    return result
+
+
 def _sharpen_image(img: np.ndarray, kernel_size: tuple = SHARPEN_KERNEL_SIZE,
                    sigma: float = SHARPEN_SIGMA, amount: float = SHARPEN_AMOUNT,
                    threshold: int = SHARPEN_THRESHOLD) -> np.ndarray:
@@ -332,6 +502,7 @@ def preprocess_image(image_path: Path, save_to_disk: bool = True):
     8. Lighting correction to normalize illumination (quality enhancement)
     9. Contrast enhancement with CLAHE (quality enhancement)
     10. Binarization (if enabled, for high-contrast text extraction)
+    11. Local perspective correction for remaining distorted regions (second pass)
     
     Args:
         image_path: Path to input image file.
@@ -385,6 +556,10 @@ def preprocess_image(image_path: Path, save_to_disk: bool = True):
     # 10. Apply binarization if enabled (for maximum text contrast)
     if APPLY_BINARIZATION:
         img = _binarize_image(img)
+
+    # Второй проход коррекции перспективы — локально для искажённых областей
+    img = _correct_local_distortions(img)
+
 
     # Convert grayscale back to BGR for compatibility with OCR engines
     img = cv2.cvtColor(img, cv2.COLOR_GRAY2BGR)

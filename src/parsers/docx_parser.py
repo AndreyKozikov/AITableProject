@@ -58,24 +58,14 @@ def _extract_images_from_docx(docx_path: Path) -> List[Path]:
                     # Читаем изображение
                     img_data = docx_zip.read(img_file)
                     
-                    # Определяем расширение файла
-                    file_ext = Path(img_file).suffix.lower()
-                    if not file_ext:
-                        # Пытаемся определить формат по данным
-                        try:
-                            img = Image.open(BytesIO(img_data))
-                            file_ext = f".{img.format.lower()}"
-                        except Exception:
-                            file_ext = ".png"  # По умолчанию
-                    
-                    # Создаем уникальное имя файла
+                    # Создаем уникальное имя файла в формате PNG
                     base_name = docx_path.stem
-                    img_filename = f"{base_name}_extracted_img_{i+1}{file_ext}"
+                    img_filename = f"{base_name}_extracted_img_{i+1}.png"
                     img_path = PARSING_DIR / img_filename
                     
-                    # Сохраняем изображение
-                    with open(img_path, 'wb') as f:
-                        f.write(img_data)
+                    # Открываем изображение через PIL и сохраняем в PNG
+                    img = Image.open(BytesIO(img_data))
+                    img.save(img_path, "PNG")
                     
                     extracted_paths.append(img_path)
                     logger.info(f"Извлечено изображение: {img_path}")

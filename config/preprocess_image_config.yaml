@@ -1,0 +1,71 @@
+# Конфигурация препроцессора изображений для OCR
+# Configuration for image preprocessing pipeline
+
+defaults:
+  # Сохранять ли итоговое изображение на диск после run()
+  save_to_disk: false
+  # Базовое имя для сохраняемых файлов
+  base_name: "preprocess"
+
+stages:
+  # Булевы переключатели этапов обработки
+  # По умолчанию все этапы включены (True), кроме инверсии и бинаризации
+  apply_inversion: false
+  apply_perspective_correction: true
+  apply_deskew: true
+  apply_resize: true
+  apply_denoise: true
+  apply_sharpen: true
+  apply_lighting_correction: true
+  apply_contrast_equalization: true
+  apply_binarization: false
+  apply_local_distortion_correction: true
+
+parameters:
+  # Параметры коррекции перспективы
+  perspective:
+    # Порог отклонения углов от 90 градусов (в градусах)
+    angle_threshold: 10.0
+  
+  # Параметры выравнивания наклона
+  deskew:
+    # Максимальный угол поиска наклона (в градусах)
+    max_angle: 12
+    # Минимальный порог для применения коррекции (в градусах)
+    min_angle_threshold: 0.5
+  
+  # Параметры масштабирования для OCR
+  resize:
+    # Целевая длина стороны изображения (736 для table detection)
+    limit_side_len: 736
+    # Тип ограничения: 'min' или 'max'
+    limit_type: "min"
+  
+  # Параметры шумоподавления
+  denoise:
+    # Параметр силы фильтрации (больше = сильнее, но размывает детали)
+    strength: 10
+  
+  # Параметры повышения резкости (unsharp mask)
+  sharpen:
+    # Размер ядра Гауссова фильтра [width, height]
+    kernel_size: [5, 5]
+    # Стандартное отклонение Гауссова фильтра
+    sigma: 1.0
+    # Сила повышения резкости (обычно 1.0-2.0)
+    amount: 1.5
+    # Порог для применения эффекта (0 = применяется везде)
+    threshold: 0
+  
+  # Параметры CLAHE (адаптивное выравнивание гистограммы)
+  clahe:
+    # Предел обрезки для адаптивного выравнивания
+    clip_limit: 2.0
+    # Размер сетки для локальной обработки [width, height]
+    tile_grid_size: [8, 8]
+  
+  # Параметры для локальной коррекции искажений
+  local_distortions:
+    # Использует тот же angle_threshold что и perspective
+    # Отладочная визуализация (рисует прямоугольники вокруг исправленных областей)
+    debug: false

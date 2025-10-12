@@ -1,4 +1,4 @@
-"""DataFrame Utilities Module.
+."""DataFrame Utilities Module.
 
 Модуль утилит для работы с DataFrame.
 
