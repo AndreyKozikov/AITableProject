@@ -6,7 +6,6 @@ This module handles image parsing and OCR processing for extracting tabular data
 from images using PaddleOCR and other AI models.
 """
 
-from io import StringIO
 from pathlib import Path
 from typing import List, Union
 
@@ -41,13 +40,21 @@ from src.utils.config import (
     USE_PADDLEOCR_DOC_ORIENTATION,
     USE_PADDLEOCR_DOC_UNWARPING,
 )
-from src.utils.df_utils import write_to_json, clean_dataframe
+from src.utils.df_utils import write_to_json, clean_dataframe, reconstruct_table_from_ocr
 from src.utils.image_preprocessor import ImagePreprocessor
 from src.utils.logging_config import get_logger
 from src.utils.registry import register_parser
 
 # Получение настроенного логгера
 logger = get_logger(__name__)
+
+# OCR post-processing (опционально)
+try:
+    from src.utils.ocr_postprocessor import OCRPostProcessor, OCRConfig
+    OCR_POSTPROCESSOR_AVAILABLE = True
+except ImportError as e:
+    OCR_POSTPROCESSOR_AVAILABLE = False
+    logger.warning(f"OCR post-processor not available: {e}")
 
 
 @register_parser(".jpg", ".jpeg", ".png")
@@ -111,7 +118,8 @@ def image_ocr(image_path: Path) -> List[Path]:
                     text_rec_score_thresh=PPSTRUCTURE_TEXT_REC_SCORE_THRESH,
                     #use_textline_orientation=True,
                     # Table recognition (из конфига)
-                    use_table_recognition=PPSTRUCTURE_USE_TABLE_RECOGNITION
+                    use_table_recognition=PPSTRUCTURE_USE_TABLE_RECOGNITION,
+                    use_formula_recognition=False
                 )
                 logger.info("PPStructureV3 инициализирован с встроенной предобработкой PaddleOCR")
                 
@@ -170,42 +178,90 @@ def image_ocr(image_path: Path) -> List[Path]:
 
         logger.info("Выполнение предсказания структуры таблицы...")
         results = table_engine.predict(image)
-        for res in results:
-            res.save_to_json(save_path=str(PARSING_DIR))
-            res.save_to_img(save_path=str(PARSING_DIR))
+        
+        # Get image dimensions for reconstruction
+        image_width = image.shape[1] if hasattr(image, 'shape') else 1200
+        logger.debug(f"Image width for table reconstruction: {image_width}")
 
         files = []
+        table_count = 0
+        
         for i, r in enumerate(results):
-            logger.info(f"Обработка результата {i}: найдено {len(r.get('parsing_res_list', []))} элементов")
-
-            for item in r['parsing_res_list']:
-                if item.label == 'table':
-                    html = item.content
-                    logger.debug(f"Найдено HTML содержимое таблицы: {len(html)} символов")
-
+            logger.info(f"Обработка результата {i}")
+            
+            # Check if this result contains table data
+            parsing_res_list = r.get('parsing_res_list', [])
+            has_table = any(
+                getattr(item, 'label', None) == 'table' 
+                for item in parsing_res_list
+            )
+            
+            if not has_table:
+                logger.debug(f"Результат {i} не содержит таблиц, пропуск")
+                continue
+            
+            # Extract OCR data from overall_ocr_res
+            overall_ocr_res = r.get('overall_ocr_res', {})
+            
+            if not overall_ocr_res:
+                logger.warning(f"Результат {i} не содержит overall_ocr_res, пропуск")
+                continue
+            
+            rec_boxes = overall_ocr_res.get('rec_boxes', [])
+            rec_texts = overall_ocr_res.get('rec_texts', [])
+            
+            if len(rec_boxes) == 0 or len(rec_texts) == 0:
+                logger.warning(f"Результат {i}: отсутствуют rec_boxes или rec_texts")
+                continue
+            
+            logger.info(f"Найдено {len(rec_boxes)} OCR блоков для реконструкции таблицы")
+            
+            try:
+                # Reconstruct table from OCR geometry
+                ocr_data = {
+                    'rec_boxes': rec_boxes,
+                    'rec_texts': rec_texts
+                }
+                
+                df = reconstruct_table_from_ocr(ocr_data, image_width=image_width)
+                
+                if df.empty:
+                    logger.warning(f"Результат {i}: реконструкция таблицы вернула пустой DataFrame")
+                    continue
+                
+                logger.info(f"Таблица реконструирована с размером: {df.shape}")
+                
+                # Clean DataFrame
+                df_clean = clean_dataframe(df)
+                
+                # OCR post-processing (if available)
+                if OCR_POSTPROCESSOR_AVAILABLE:
                     try:
-                        dfs = pd.read_html(StringIO(html))
-                        if dfs:
-                            df = dfs[0]
-                            logger.info(f"Извлечена таблица размером: {df.shape}")
-                            df_clean = clean_dataframe(df)
-                            # Сохранение как JSON файл с определением и генерацией заголовков
-                            json_file_path = PARSING_DIR / f"{image_path.stem}_table_{i}.json"
-                            write_to_json(
-                                json_file_path,
-                                df_clean,
-                                detect_headers=True,
-                                temp_dir=PARSING_DIR
-                            )
-                            files.append(json_file_path)
-                            logger.info(f"Таблица сохранена как JSON: {json_file_path}")
-                        else:
-                            logger.warning(f"Не извлечено dataframes из HTML в результате {i}")
-                    except Exception as e:
-                        logger.error(f"Ошибка обработки HTML таблицы в результате {i}: {e}")
-                        continue
-                else:
-                    logger.debug(f"Пропуск не-табличного элемента: {item.label}")
+                        ocr_config = OCRConfig(debug=False, log_corrections=False)
+                        ocr_processor = OCRPostProcessor(config=ocr_config)
+                        df_clean = ocr_processor.process_dataframe(df_clean)
+                        logger.debug("OCR post-processing applied successfully")
+                    except Exception as ocr_error:
+                        logger.warning(f"OCR post-processing failed: {ocr_error}, continuing with cleaned data")
+                
+                # Save as JSON with header detection
+                json_file_path = PARSING_DIR / f"{image_path.stem}_table_{table_count}.json"
+                write_to_json(
+                    json_file_path,
+                    df_clean,
+                    detect_headers=True,
+                    temp_dir=PARSING_DIR
+                )
+                files.append(json_file_path)
+                logger.info(f"Таблица {table_count} сохранена как JSON: {json_file_path}")
+                table_count += 1
+                
+            except Exception as e:
+                logger.error(f"Ошибка реконструкции таблицы из результата {i}: {e}", exc_info=True)
+                continue
+        
+        if table_count == 0:
+            logger.info("Таблицы не найдены на странице")
 
         logger.info(f"OCR обработка завершена. Создано {len(files)} файлов")
         return files

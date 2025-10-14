@@ -7,7 +7,7 @@ import pandas as pd
 import pdfplumber as pdf
 import math
 from src.utils.config import HEADER_ANCHORS, PARSING_DIR
-from src.utils.df_utils import write_to_json
+from src.utils.df_utils import write_to_json, clean_dataframe
 from src.utils.registry import register_parser
 import matplotlib.pyplot as plt
 
@@ -380,29 +380,6 @@ def extract_tables_on_page(page):
         return tables
 
 
-# def parse_table_block(page, lines, header: dict, bounds: list[float],
-#                       n_rows: int | None = None) -> dict:
-#     """
-#     Возвращает чистые «сырые» данные после шапки:
-#       {
-#         "bounds": [...],
-#         "start_idx": int,
-#         "end_idx": int,
-#         "raw_rows": [ [col0, col1, ...], ... ]
-#       }
-#     """
-#     start = header["bottom_idx"] + 1
-#     end = len(lines) if n_rows is None else min(len(lines), start + n_rows)
-#
-#     raw_rows = cut_block_into_matrix(lines, bounds, start, end)
-#     return {
-#         "bounds": bounds[:],
-#         "start_idx": start,
-#         "end_idx": end,
-#         "raw_rows": raw_rows,
-#     }
-
-
 def parse_table_block(page, lines, header: dict, bounds, y_bounds: list[float],
                       n_rows: int | None = None) -> dict:
     """
@@ -479,11 +456,11 @@ def parsing_tables(path: str, kinds, file_name: str):
                 if select_table(table):
                     # Convert list of lists to DataFrame
                     df = pd.DataFrame(table, dtype=str)
-                    
+                    df_cleaned = clean_dataframe(df)
                     output_file_path = output_path / f"{file_name}_table{i}.json"
                     write_to_json(
                         output_file_path,
-                        df,
+                        df_cleaned,
                         detect_headers=True,
                         temp_dir=output_path
                     )
@@ -521,12 +498,12 @@ def parsing_tables(path: str, kinds, file_name: str):
         
         # Convert list of lists to DataFrame
         df = pd.DataFrame(raw_rows, dtype=str)
-        
+        df_cleaned = clean_dataframe(df)
         output_file_path = output_path / f"{file_name}.json"
         files_list.append(f"{file_name}.json")
         write_to_json(
             output_file_path,
-            df,
+            df_cleaned,
             detect_headers=True,
             temp_dir=output_path
         )

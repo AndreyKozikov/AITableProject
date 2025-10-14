@@ -351,8 +351,8 @@ def parse_docx(file_path: Union[str, Path]) -> List[Path]:
             # Обрабатываем каждое изображение через парсер изображений
             for img_path in extracted_images:
                 try:
-                    # Вызываем парсер изображений для OCR обработки
-                    img_result = image_ocr(str(img_path))
+                    # Вызываем парсер изображений для OCR обработки (передаем Path объект)
+                    img_result = image_ocr(img_path)
                     if img_result:
                         processed_files.extend(img_result)
                         logger.info(f"Изображение {img_path} обработано через OCR")

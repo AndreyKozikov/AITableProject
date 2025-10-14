@@ -1,4 +1,4 @@
-."""DataFrame Utilities Module.
+"""DataFrame Utilities Module.
 
 Модуль утилит для работы с DataFrame.
 
@@ -12,6 +12,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, List, Union
 
+import numpy as np
 import pandas as pd
 
 from src.utils.config import HEADER_ANCHORS
@@ -169,6 +170,126 @@ def is_header_row_semantic(
         return False
 
 
+def reconstruct_table_from_ocr(
+    json_data: dict,
+    image_width: int = 1200,
+    min_gap_width: int = 10
+) -> pd.DataFrame:
+    """Reconstruct table structure from OCR results based on spatial analysis.
+    
+    This function rebuilds tabular structure from OCR bounding boxes and texts
+    by analyzing the spatial distribution of text blocks to determine column
+    boundaries and row positions.
+    
+    Args:
+        json_data: Dictionary containing OCR results with 'rec_boxes' and 'rec_texts'.
+                  Expected structure: {'rec_boxes': [[x1,y1,x2,y2], ...], 'rec_texts': [...]}
+        image_width: Width of the analyzed image in pixels for density map.
+        min_gap_width: Minimum width of empty zone to be considered a column boundary.
+        
+    Returns:
+        DataFrame with reconstructed table structure.
+        
+    Algorithm:
+        1. Build density map across image width
+        2. Find continuous zero zones (gaps) as column boundaries
+        3. Calculate block centers (x_center, y_center)
+        4. Distribute blocks into columns based on x_center
+        5. Sort blocks within columns by y_center
+        6. Align rows across columns by maximum row count
+    """
+    try:
+        logger.debug(f"Starting table reconstruction from OCR data (image_width={image_width})")
+        
+        # Extract boxes and texts from json_data
+        boxes = json_data.get('rec_boxes', [])
+        texts = json_data.get('rec_texts', [])
+        
+        if len(boxes) == 0 or len(texts) == 0:
+            logger.warning("No OCR boxes or texts found in data")
+            return pd.DataFrame()
+        
+        logger.info(f"Processing {len(boxes)} OCR blocks")
+        
+        # Step 1: Build density map
+        density = np.zeros(image_width, dtype=int)
+        for (x1, y1, x2, y2) in boxes:
+            x1_int, x2_int = int(max(0, x1)), int(min(image_width - 1, x2))
+            density[x1_int:x2_int] += 1
+        
+        logger.debug(f"Density map built with max density: {density.max()}")
+        
+        # Step 2: Find column boundaries (continuous zero zones)
+        boundaries = []
+        in_gap = False
+        start = None
+        
+        for i, val in enumerate(density):
+            if val == 0 and not in_gap:
+                in_gap = True
+                start = i
+            elif val != 0 and in_gap:
+                end = i
+                in_gap = False
+                if end - start > min_gap_width:
+                    middle = int((start + end) / 2)
+                    boundaries.append(middle)
+        
+        # Check if last gap extends to image edge
+        if in_gap and (image_width - start) > min_gap_width:
+            middle = int((start + image_width) / 2)
+            boundaries.append(middle)
+        
+        logger.info(f"Found {len(boundaries)} column boundaries: {boundaries}")
+        
+        # Step 3: Calculate block centers
+        blocks = []
+        for (x1, y1, x2, y2), text in zip(boxes, texts):
+            x_center = (x1 + x2) / 2
+            y_center = (y1 + y2) / 2
+            blocks.append((x_center, y_center, text.strip()))
+        
+        # Step 4: Distribute blocks into columns
+        num_columns = len(boundaries) + 1
+        columns = [[] for _ in range(num_columns)]
+        
+        for x_center, y_center, text in blocks:
+            col_index = sum(x_center > b for b in boundaries)
+            columns[col_index].append((y_center, text))
+        
+        logger.debug(f"Blocks distributed into {num_columns} columns")
+        
+        # Step 5: Sort blocks within each column by y_center
+        for col in columns:
+            col.sort(key=lambda x: x[0])
+        
+        # Step 6: Build table with row alignment
+        max_rows = max(len(col) for col in columns) if columns else 0
+        
+        if max_rows == 0:
+            logger.warning("No rows found in table")
+            return pd.DataFrame()
+        
+        table = []
+        for i in range(max_rows):
+            row = []
+            for col in columns:
+                if i < len(col):
+                    row.append(col[i][1])  # Append text
+                else:
+                    row.append("")  # Empty cell
+            table.append(row)
+        
+        df = pd.DataFrame(table)
+        logger.info(f"Table reconstructed with shape: {df.shape}")
+        
+        return df
+        
+    except Exception as e:
+        logger.error(f"Error reconstructing table from OCR data: {e}", exc_info=True)
+        return pd.DataFrame()
+
+
 def write_to_json(
     file_path: Union[str, Path],
     data: Any,
@@ -230,7 +351,7 @@ def write_to_json(
                 # Временный CSV НЕ удаляется для отладки
                 if temp_csv_path.exists():
                     logger.info(f"Temporary CSV kept for debugging: {temp_csv_path}")
-                    # temp_csv_path.unlink()  # Закомментировано для отладки
+                    temp_csv_path.unlink()  # Закомментировано для отладки
         
         elif isinstance(data, pd.DataFrame):
             # Convert DataFrame to records without header detection
@@ -289,16 +410,35 @@ def clean_dataframe(df: pd.DataFrame, use_languagetool: bool = False) -> pd.Data
     try:
         original_shape = df.shape
         
-        # Remove completely empty rows and columns
+        # Remove completely empty rows and columns (NaN values)
         df = df.dropna(how='all').dropna(axis=1, how='all')
         
         # Fill NaN with empty strings
         df = df.fillna('')
         
-        # Strip whitespace from string columns
+        # Strip whitespace from string columns and replace semicolons
         for col in df.columns:
             if df[col].dtype == 'object':
-                df[col] = df[col].astype(str).str.strip()
+                df[col] = df[col].astype(str).str.strip().str.replace(';', ' ', regex=False)
+        
+        # Remove columns where all values are empty strings (after stripping)
+        non_empty_cols = (df != '').any(axis=0)
+        df = df.loc[:, non_empty_cols]
+        
+        # Remove rows where more than 1/3 of cells are empty
+        if len(df.columns) > 0:
+            empty_cells_per_row = (df == '').sum(axis=1)
+            total_cols = len(df.columns)
+            empty_threshold = total_cols / 3
+            rows_to_keep = empty_cells_per_row <= empty_threshold
+            rows_removed = (~rows_to_keep).sum()
+            if rows_removed > 0:
+                logger.debug(f"Removing {rows_removed} rows with >1/3 empty cells")
+            df = df.loc[rows_to_keep, :]
+        
+        # Remove rows where all values are empty strings
+        non_empty_rows = (df != '').any(axis=1)
+        df = df.loc[non_empty_rows, :]
         
         # Reset index
         df = df.reset_index(drop=True)
