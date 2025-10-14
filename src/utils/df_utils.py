@@ -425,16 +425,16 @@ def clean_dataframe(df: pd.DataFrame, use_languagetool: bool = False) -> pd.Data
         non_empty_cols = (df != '').any(axis=0)
         df = df.loc[:, non_empty_cols]
         
-        # Remove rows where more than 1/3 of cells are empty
-        if len(df.columns) > 0:
-            empty_cells_per_row = (df == '').sum(axis=1)
-            total_cols = len(df.columns)
-            empty_threshold = total_cols / 3
-            rows_to_keep = empty_cells_per_row <= empty_threshold
-            rows_removed = (~rows_to_keep).sum()
-            if rows_removed > 0:
-                logger.debug(f"Removing {rows_removed} rows with >1/3 empty cells")
-            df = df.loc[rows_to_keep, :]
+        # # Remove rows where more than 1/3 of cells are empty
+        # if len(df.columns) > 0:
+        #     empty_cells_per_row = (df == '').sum(axis=1)
+        #     total_cols = len(df.columns)
+        #     empty_threshold = total_cols / 3
+        #     rows_to_keep = empty_cells_per_row <= empty_threshold
+        #     rows_removed = (~rows_to_keep).sum()
+        #     if rows_removed > 0:
+        #         logger.debug(f"Removing {rows_removed} rows with >1/3 empty cells")
+        #     df = df.loc[rows_to_keep, :]
         
         # Remove rows where all values are empty strings
         non_empty_rows = (df != '').any(axis=1)
