@@ -54,7 +54,7 @@ try:
     OCR_POSTPROCESSOR_AVAILABLE = True
 except ImportError as e:
     OCR_POSTPROCESSOR_AVAILABLE = False
-    logger.warning(f"OCR post-processor not available: {e}")
+    logger.warning(f"OCR пост-процессор недоступен: {e}")
 
 
 @register_parser(".jpg", ".jpeg", ".png")
@@ -179,9 +179,9 @@ def image_ocr(image_path: Path) -> List[Path]:
         logger.info("Выполнение предсказания структуры таблицы...")
         results = table_engine.predict(image)
         
-        # Get image dimensions for reconstruction
+        # Получаем размеры изображения для реконструкции
         image_width = image.shape[1] if hasattr(image, 'shape') else 1200
-        logger.debug(f"Image width for table reconstruction: {image_width}")
+        logger.debug(f"Ширина изображения для реконструкции таблицы: {image_width}")
 
         files = []
         table_count = 0
@@ -240,11 +240,11 @@ def image_ocr(image_path: Path) -> List[Path]:
                         ocr_config = OCRConfig(debug=False, log_corrections=False)
                         ocr_processor = OCRPostProcessor(config=ocr_config)
                         df_clean = ocr_processor.process_dataframe(df_clean)
-                        logger.debug("OCR post-processing applied successfully")
+                        logger.debug("OCR пост-обработка применена успешно")
                     except Exception as ocr_error:
-                        logger.warning(f"OCR post-processing failed: {ocr_error}, continuing with cleaned data")
+                        logger.warning(f"OCR пост-обработка не удалась: {ocr_error}, продолжаем с очищенными данными")
                 
-                # Save as JSON with header detection
+                # Сохраняем как JSON с определением заголовков
                 json_file_path = PARSING_DIR / f"{image_path.stem}_table_{table_count}.json"
                 write_to_json(
                     json_file_path,

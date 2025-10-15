@@ -17,27 +17,27 @@ PARSERS: Dict[str, Callable] = {}
 
 
 def register_parser(*suffixes: str) -> Callable:
-    """Decorator for registering parser by file extension.
+    """Декоратор для регистрации парсера по расширению файла.
     
     Args:
-        *suffixes: File extensions (e.g. '.txt', '.pdf').
+        *suffixes: Расширения файлов (например, '.txt', '.pdf').
         
     Returns:
-        Function decorator.
+        Декоратор функции.
     """
     def wrapper(func: Callable) -> Callable:
-        """Inner decorator function.
+        """Внутренняя функция декоратора.
         
         Args:
-            func: Parser function to register.
+            func: Функция парсера для регистрации.
             
         Returns:
-            Original function unchanged.
+            Исходная функция без изменений.
         """
         for suffix in suffixes:
             normalized_suffix = suffix.lower().strip()
             if normalized_suffix:
                 PARSERS[normalized_suffix] = func
-                logger.debug(f"Registered parser {func.__name__} for {normalized_suffix}")
+                logger.debug(f"Зарегистрирован парсер {func.__name__} для {normalized_suffix}")
         return func
     return wrapper

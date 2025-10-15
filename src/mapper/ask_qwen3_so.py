@@ -288,13 +288,7 @@ def ask_qwen3_structured(
         # Получаем JSON схему для промпта
         json_schema = container_model.model_json_schema()
         
-        # Логируем JSON схему
-        logger.info(f"\n{'='*60}")
-        logger.info("JSON Schema for structured output:")
-        logger.info(f"{'='*60}")
-        logger.info(f"{json_schema}")
-        logger.info(f"{'='*60}\n")
-        
+
         # Получаем список колонок для header
         if extended:
             csv_path = MODEL_DIR / "extended.csv"
@@ -328,14 +322,6 @@ def ask_qwen3_structured(
         logger.info(f"Schema columns: {header_str}")
         logger.info(f"Total messages count: {len(messages)}")
         
-        # Логируем полностью все сообщения
-        for idx, message in enumerate(messages, 1):
-            logger.info(f"\n{'='*60}")
-            logger.info(f"Message {idx}/{len(messages)} - Role: {message['role']}")
-            logger.info(f"{'='*60}")
-            logger.info(f"Content length: {len(message['content'])} characters")
-            logger.info(f"Full content:\n{message['content']}")
-            logger.info(f"{'='*60}\n")
         
         # Применяем chat template с параметром enable_thinking (из статьи)
         text = tokenizer.apply_chat_template(
@@ -401,13 +387,6 @@ def ask_qwen3_structured(
                     json_lines.append(line)
             output_text_clean = "\n".join(json_lines)
         
-        # Логируем очищенный JSON перед валидацией
-        logger.info(f"\n{'='*60}")
-        logger.info("Cleaned JSON for validation:")
-        logger.info(f"{'='*60}")
-        logger.info(f"Cleaned JSON length: {len(output_text_clean)} characters")
-        logger.info(f"Cleaned JSON:\n{output_text_clean}")
-        logger.info(f"{'='*60}\n")
         
         # Валидация через model_validate_json (метод из статьи)
         logger.info("Validating output with Pydantic model_validate_json...")

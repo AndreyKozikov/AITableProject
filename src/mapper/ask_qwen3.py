@@ -26,20 +26,20 @@ tokenizer = None
 
 
 def load_model() -> None:
-    """Load Qwen3 model and tokenizer.
+    """Загружает модель Qwen3 и токенизатор.
     
-    Initializes the global model and tokenizer variables if they haven't been
-    loaded yet. Uses appropriate device (CUDA/CPU) and data type.
+    Инициализирует глобальные переменные модели и токенизатора, если они еще не
+    были загружены. Использует подходящее устройство (CUDA/CPU) и тип данных.
     
     Raises:
-        Exception: If model loading fails.
+        Exception: Если загрузка модели не удалась.
     """
     global model, tokenizer
     
     try:
         if model is None or tokenizer is None:
-            logger.info(f"Loading Qwen3 model: {MODEL_ID}")
-            logger.info(f"Using device: {DEVICE}, dtype: {TORCH_DTYPE}")
+            logger.info(f"Загрузка модели Qwen3: {MODEL_ID}")
+            logger.info(f"Используемое устройство: {DEVICE}, тип данных: {TORCH_DTYPE}")
             
             tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
             model = AutoModelForCausalLM.from_pretrained(
@@ -49,33 +49,33 @@ def load_model() -> None:
                 trust_remote_code=True
             )
             
-            logger.info("Qwen3 model and tokenizer loaded successfully")
+            logger.info("Модель Qwen3 и токенизатор загружены успешно")
             
     except Exception as e:
-        logger.error(f"Failed to load Qwen3 model: {e}")
+        logger.error(f"Не удалось загрузить модель Qwen3: {e}")
         raise
 
 
 
 def ask_qwen3(prompt: Optional[str] = None, max_new_tokens: int = 2048) -> str:
-    """Query Qwen3 model with text prompt.
+    """Запрашивает модель Qwen3 с текстовым промптом.
     
     Args:
-        prompt: Text prompt for the model.
-        max_new_tokens: Maximum number of tokens to generate.
+        prompt: Текстовый промпт для модели.
+        max_new_tokens: Максимальное количество токенов для генерации.
         
     Returns:
-        Generated response from the model.
+        Сгенерированный ответ от модели.
         
     Raises:
-        Exception: If model inference fails.
+        Exception: Если инференс модели не удался.
     """
     if not prompt:
-        logger.warning("Empty prompt provided to Qwen3")
+        logger.warning("Пустой промпт предоставлен в Qwen3")
         return ""
     
-    logger.info(f"Starting Qwen3 inference with prompt length: {len(prompt)}")
-    logger.debug(f"Prompt preview: {prompt[:200]}...")
+    logger.info(f"Начало инференса Qwen3 с длиной промпта: {len(prompt)}")
+    logger.debug(f"Превью промпта: {prompt[:200]}...")
     
     try:
         load_model()
@@ -91,7 +91,7 @@ def ask_qwen3(prompt: Optional[str] = None, max_new_tokens: int = 2048) -> str:
             }
         ]
         
-        logger.info("Preparing model input...")
+        logger.info("Подготовка входных данных модели...")
         text = tokenizer.apply_chat_template(
             messages,
             tokenize=False,
@@ -102,8 +102,8 @@ def ask_qwen3(prompt: Optional[str] = None, max_new_tokens: int = 2048) -> str:
         model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
         eos_token_id = tokenizer.eos_token_id
         
-        logger.info(f"Running model inference with max_new_tokens: {max_new_tokens}")
-        logger.debug(f"Input token count: {model_inputs.input_ids.shape[1]}")
+        logger.info(f"Запуск инференса модели с max_new_tokens: {max_new_tokens}")
+        logger.debug(f"Количество входных токенов: {model_inputs.input_ids.shape[1]}")
         
         generated_ids = model.generate(
             **model_inputs,
@@ -118,11 +118,11 @@ def ask_qwen3(prompt: Optional[str] = None, max_new_tokens: int = 2048) -> str:
         output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist()
         output_text = tokenizer.decode(output_ids, skip_special_tokens=True)
         
-        logger.info(f"Model inference completed. Generated {len(output_text)} characters")
-        logger.debug(f"Generated text preview: {output_text[:200]}...")
+        logger.info(f"Инференс модели завершен. Сгенерировано {len(output_text)} символов")
+        logger.debug(f"Превью сгенерированного текста: {output_text[:200]}...")
         
         return output_text
         
     except Exception as e:
-        logger.error(f"Error in Qwen3 inference: {e}")
+        logger.error(f"Ошибка в инференсе Qwen3: {e}")
         raise

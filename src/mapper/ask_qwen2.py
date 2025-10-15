@@ -28,88 +28,88 @@ processor = None
 
 
 def load_model() -> None:
-    """Load Qwen2-VL model and processor.
+    """Загружает модель Qwen2-VL и процессор.
     
-    Initializes the global model and processor variables if they haven't been
-    loaded yet. Uses appropriate device (CUDA/CPU) and data type.
+    Инициализирует глобальные переменные модели и процессора, если они еще не
+    были загружены. Использует подходящее устройство (CUDA/CPU) и тип данных.
     
     Raises:
-        Exception: If model loading fails.
+        Exception: Если загрузка модели не удалась.
     """
     global model, processor
     
     try:
         if model is None:
-            logger.info(f"Loading Qwen2-VL model: {MODEL_ID}")
-            logger.info(f"Using device: {DEVICE}, dtype: {TORCH_DTYPE}")
+            logger.info(f"Загрузка модели Qwen2-VL: {MODEL_ID}")
+            logger.info(f"Используемое устройство: {DEVICE}, тип данных: {TORCH_DTYPE}")
             
             model = Qwen2VLForConditionalGeneration.from_pretrained(
                 MODEL_ID, 
                 torch_dtype=TORCH_DTYPE
             ).to("cpu")
             model = model.to(DEVICE)
-            logger.info("Model loaded successfully")
+            logger.info("Модель загружена успешно")
 
         if processor is None:
-            logger.info("Loading processor...")
+            logger.info("Загрузка процессора...")
             processor = AutoProcessor.from_pretrained(MODEL_ID)
-            logger.info("Processor loaded successfully")
+            logger.info("Процессор загружен успешно")
             
     except Exception as e:
-        logger.error(f"Failed to load Qwen2-VL model: {e}")
+        logger.error(f"Не удалось загрузить модель Qwen2-VL: {e}")
         raise
 
 
 def tokens_count(text: str) -> int:
-    """Count tokens in text using Qwen2 tokenizer.
+    """Подсчитывает токены в тексте используя токенизатор Qwen2.
     
     Args:
-        text: Text to count tokens for.
+        text: Текст для подсчета токенов.
         
     Returns:
-        Number of tokens in the text.
+        Количество токенов в тексте.
         
     Raises:
-        Exception: If tokenizer loading fails.
+        Exception: Если загрузка токенизатора не удалась.
     """
     try:
-        logger.debug(f"Counting tokens for text with {len(text)} characters")
+        logger.debug(f"Подсчет токенов для текста с {len(text)} символами")
         tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
         tokens = tokenizer.encode(text, add_special_tokens=False)
         token_count = len(tokens)
-        logger.debug(f"Token count: {token_count}")
+        logger.debug(f"Количество токенов: {token_count}")
         return token_count
     except Exception as e:
-        logger.error(f"Error counting tokens: {e}")
+        logger.error(f"Ошибка при подсчете токенов: {e}")
         raise
 
 
 def ask_qwen2(image_path: Optional[str] = None, 
               prompt: Optional[str] = None, 
               max_new_tokens: int = 32768) -> str:
-    """Query Qwen2-VL model with image and/or text prompt.
+    """Запрашивает модель Qwen2-VL с изображением и/или текстовым промптом.
     
     Args:
-        image_path: Path to image file (optional).
-        prompt: Text prompt for the model.
-        max_new_tokens: Maximum number of tokens to generate.
+        image_path: Путь к файлу изображения (опционально).
+        prompt: Текстовый промпт для модели.
+        max_new_tokens: Максимальное количество токенов для генерации.
         
     Returns:
-        Generated response from the model.
+        Сгенерированный ответ от модели.
         
     Raises:
-        Exception: If model inference fails.
+        Exception: Если инференс модели не удался.
     """
-    logger.info(f"Starting Qwen2 inference with image: {image_path is not None}, "
-                f"prompt length: {len(prompt) if prompt else 0}")
+    logger.info(f"Начало инференса Qwen2 с изображением: {image_path is not None}, "
+                f"длина промпта: {len(prompt) if prompt else 0}")
     
     try:
         load_model()
         
         if image_path is not None:
-            logger.info(f"Loading image: {image_path}")
+            logger.info(f"Загрузка изображения: {image_path}")
             img = Image.open(image_path)
-            logger.debug(f"Image loaded, size: {img.size}, mode: {img.mode}")
+            logger.debug(f"Изображение загружено, размер: {img.size}, режим: {img.mode}")
 
             messages = [
                 {
@@ -125,7 +125,7 @@ def ask_qwen2(image_path: Optional[str] = None,
                 }
             ]
         else:
-            logger.info("Processing text-only request")
+            logger.info("Обработка запроса только с текстом")
             messages = [
                 {
                     "role": "system",
@@ -137,7 +137,7 @@ def ask_qwen2(image_path: Optional[str] = None,
                 }
             ]
 
-        logger.info("Preparing model input...")
+        logger.info("Подготовка входных данных модели...")
         text = processor.apply_chat_template(
             messages, 
             tokenize=False, 
@@ -154,9 +154,9 @@ def ask_qwen2(image_path: Optional[str] = None,
         )
         inputs = inputs.to(DEVICE)
         
-        logger.info(f"Running model inference with max_new_tokens: {max_new_tokens}")
+        logger.info(f"Запуск инференса модели с max_new_tokens: {max_new_tokens}")
         
-        # Generate output
+        # Генерируем вывод
         generated_ids = model.generate(
             **inputs, 
             max_new_tokens=max_new_tokens,
@@ -174,11 +174,11 @@ def ask_qwen2(image_path: Optional[str] = None,
             clean_up_tokenization_spaces=False
         )[0]
         
-        logger.info(f"Model inference completed. Generated {len(output_text)} characters")
-        logger.debug(f"Generated text preview: {output_text[:200]}...")
+        logger.info(f"Инференс модели завершен. Сгенерировано {len(output_text)} символов")
+        logger.debug(f"Превью сгенерированного текста: {output_text[:200]}...")
         
         return output_text
         
     except Exception as e:
-        logger.error(f"Error in Qwen2 inference: {e}")
+        logger.error(f"Ошибка в инференсе Qwen2: {e}")
         raise

@@ -28,13 +28,13 @@ logger = get_logger(__name__)
 
 
 def _ensure_list(x: Any) -> List[Any]:
-    """Convert value to list if it's not already a list.
+    """Преобразует значение в список, если оно еще не является списком.
     
     Args:
-        x: Value to convert.
+        x: Значение для преобразования.
         
     Returns:
-        List containing the value or empty list for None.
+        Список, содержащий значение, или пустой список для None.
     """
     if x is None:
         return []
@@ -44,15 +44,15 @@ def _ensure_list(x: Any) -> List[Any]:
 
 
 def parsing_files(files: List[Path]) -> List[Path]:
-    """Process list of files through appropriate parsers.
+    """Обрабатывает список файлов через соответствующие парсеры.
     
     Args:
-        files: List of Path objects to process.
+        files: Список объектов Path для обработки.
         
     Returns:
-        List of processed file paths.
+        Список путей к обработанным файлам.
     """
-    logger.info(f"Starting to parse {len(files)} files")
+    logger.info(f"Начинаем парсинг {len(files)} файлов")
     
     results = {}
     parsing_files_name = []
@@ -63,57 +63,57 @@ def parsing_files(files: List[Path]) -> List[Path]:
             file_name = file.name
             handler = PARSERS.get(suffix)
             
-            logger.debug(f"Processing file: {file_name} with extension: {suffix}")
+            logger.debug(f"Обработка файла: {file_name} с расширением: {suffix}")
             
             if handler:
-                logger.info(f"Using parser {handler.__name__} for file: {file_name}")
+                logger.info(f"Используем парсер {handler.__name__} для файла: {file_name}")
                 files_list = _ensure_list(handler(file)) # Вызов парсера через зарегистрированные для расширений методы
                 if files_list is not None:
                     parsing_files_name.extend(files_list)
                     results[file_name] = "Файл успешно обработан"
-                    logger.info(f"Successfully processed file: {file_name}")
+                    logger.info(f"Файл успешно обработан: {file_name}")
                 else:
                     results[file_name] = "Ошибка при обработке файла"
-                    logger.warning(f"Handler returned None for file: {file_name}")
+                    logger.warning(f"Обработчик вернул None для файла: {file_name}")
             else:
                 results[file_name] = "❌ Неподдерживаемый формат"
-                logger.warning(f"Unsupported file format: {suffix} for file: {file_name}")
+                logger.warning(f"Неподдерживаемый формат файла: {suffix} для файла: {file_name}")
                 
         except Exception as e:
             results[file_name] = f"Ошибка: {str(e)}"
-            logger.error(f"Error processing file {file_name}: {e}")
+            logger.error(f"Ошибка обработки файла {file_name}: {e}")
             continue
     
     successful_files = sum(1 for result in results.values() if "успешно" in result)
-    logger.info(f"Parsing completed. Successful: {successful_files}, Total: {len(files)}, Results: {len(parsing_files_name)}")
+    logger.info(f"Парсинг завершен. Успешно: {successful_files}, Всего: {len(files)}, Результатов: {len(parsing_files_name)}")
     
     return parsing_files_name
 
 
 def save_to_xlsx(rows: List[dict]) -> Path:
-    """Save data to Excel file.
+    """Сохраняет данные в Excel файл.
     
     Args:
-        rows: List of dictionaries where each dict represents a table row.
-              Dictionary keys are column names, values are cell contents.
+        rows: Список словарей, где каждый словарь представляет строку таблицы.
+              Ключи словаря - имена столбцов, значения - содержимое ячеек.
         
     Returns:
-        Path to created Excel file.
+        Путь к созданному Excel файлу.
     """
-    logger.info(f"Saving {len(rows)} rows to Excel")
+    logger.info(f"Сохраняем {len(rows)} строк в Excel")
     
     if not rows:
-        logger.warning("No data to save to Excel")
+        logger.warning("Нет данных для сохранения в Excel")
         return None
     
-    # Create DataFrame from list of dictionaries
+    # Создаем DataFrame из списка словарей
     df = pd.DataFrame(rows)
     
     file_path = OUT_DIR / 'result.xlsx'
     df.to_excel(file_path, index=False)
     
-    logger.info(f"Data saved to Excel: {file_path}")
-    logger.debug(f"Excel file size: {file_path.stat().st_size} bytes")
+    logger.info(f"Данные сохранены в Excel: {file_path}")
+    logger.debug(f"Размер Excel файла: {file_path.stat().st_size} байт")
     
     return file_path
 
@@ -121,33 +121,33 @@ def save_to_xlsx(rows: List[dict]) -> Path:
 def process_files(files: List[Path], 
                  extended: bool = False, 
                  remote_model: bool = False) -> Optional[Path]:
-    """Main file processing function.
+    """Главная функция обработки файлов.
     
     Args:
-        files: List of files to process.
-        extended: Extended processing flag.
-        remote_model: Use remote AI model flag.
+        files: Список файлов для обработки.
+        extended: Флаг расширенной обработки.
+        remote_model: Флаг использования удаленной AI модели.
         
     Returns:
-        Path to created result file or None.
+        Путь к созданному файлу результата или None.
     """
-    logger.info(f"Starting processing of {len(files)} files")
-    logger.info(f"Extended mode: {extended}, Remote model: {remote_model}")
+    logger.info(f"Начинаем обработку {len(files)} файлов")
+    logger.info(f"Расширенный режим: {extended}, Удаленная модель: {remote_model}")
     
     try:
         if remote_model:
-            logger.info("Using remote OpenAI model for processing")
+            logger.info("Используем удаленную модель OpenAI для обработки")
             handler = PARSERS.get("openai")
             if not handler:
-                logger.error("OpenAI parser not found in registry")
+                logger.error("Парсер OpenAI не найден в реестре")
                 return None
             rows, header = handler([str(f) for f in files])
-            logger.info("Remote model processing completed")
+            logger.info("Обработка удаленной моделью завершена")
         else:
-            logger.info("Using local processing pipeline")
+            logger.info("Используем локальный конвейер обработки")
             files_list_csv = parsing_files(files)
             if not files_list_csv:
-                logger.warning("No processed files for mapping")
+                logger.warning("Нет обработанных файлов для маппинга")
                 return None
                 
             rows = mapper_structured(
@@ -157,16 +157,16 @@ def process_files(files: List[Path],
                     )
 
 
-            logger.info("Local processing completed")
+            logger.info("Локальная обработка завершена")
         
         file_path = save_to_xlsx(rows)
         if file_path:
-            logger.info(f"File processing completed successfully: {file_path}")
+            logger.info(f"Обработка файлов завершена успешно: {file_path}")
         else:
-            logger.error("Failed to save results to Excel")
+            logger.error("Не удалось сохранить результаты в Excel")
             
         return file_path
         
     except Exception as e:
-        logger.error(f"Critical error in file processing: {e}")
+        logger.error(f"Критическая ошибка при обработке файлов: {e}")
         return None

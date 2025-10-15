@@ -25,18 +25,18 @@ st.set_page_config(
 
 
 def load_custom_css():
-    """Load custom CSS from external file for compact, professional styling"""
+    """Загружает пользовательский CSS из внешнего файла для компактного, профессионального стиля"""
     try:
-        # Load CSS from external file
+        # Загружаем CSS из внешнего файла
         css_file_path = Path(__file__).parent / "static" / "styles.css"
         with open(css_file_path, "r", encoding="utf-8") as f:
             css_content = f.read()
         
-        # Apply CSS using st.html for better compatibility
+        # Применяем CSS используя st.html для лучшей совместимости
         st.html(f"<style>{css_content}</style>")
         
     except FileNotFoundError:
-        # Fallback to basic styling if CSS file not found
+        # Резервный вариант базового стиля, если CSS файл не найден
         st.markdown("""
         <style>
         .stApp {
@@ -52,20 +52,21 @@ def load_custom_css():
 
 
 def create_compact_header():
-    """Create compact header with modern styling"""
+    """Создает компактный заголовок с современным стилем"""
     header_html = load_template("header")
     st.markdown(header_html, unsafe_allow_html=True)
 
 
 def create_compact_upload_component() -> list:
-    """Render a single modern drag & drop zone using Streamlit's file_uploader.
+    """Отображает современную зону перетаскивания файлов используя file_uploader Streamlit.
 
-    Returns a list of uploaded files.
+    Returns:
+        Список загруженных файлов.
     """
     upload_card_html = load_template("upload_card")
     st.markdown(upload_card_html, unsafe_allow_html=True)
 
-    # Use collapsed label visibility for accessibility while keeping UI minimal
+    # Используем скрытую видимость метки для доступности, сохраняя минимальный UI
     uploaded_files = st.file_uploader(
         label="Загрузите файлы документов для обработки",
         type=["txt", "csv", "xlsx", "xls", "pdf", "doc", "docx", "jpg", "jpeg", "png"],
@@ -78,7 +79,7 @@ def create_compact_upload_component() -> list:
 
 
 def create_progress_tracker(current_step, total_steps, status_message):
-    """Create enhanced progress tracking component"""
+    """Создает улучшенный компонент отслеживания прогресса"""
     progress_percentage = (current_step / total_steps) * 100
     
     progress_html = render_template(
@@ -94,13 +95,13 @@ def create_progress_tracker(current_step, total_steps, status_message):
 
 def _get_file_icon(file_path: Path) -> str:
     """
-    Get appropriate emoji icon for file type.
+    Получает подходящую emoji иконку для типа файла.
     
     Args:
-        file_path: Path to the file
+        file_path: Путь к файлу
     
     Returns:
-        Emoji icon string
+        Строка с emoji иконкой
     """
     ext = file_path.suffix.lower()
     icon_map = {
@@ -119,11 +120,11 @@ def _get_file_icon(file_path: Path) -> str:
 
 
 def create_compact_file_list(files):
-    """Create compact file list with modern styling for iframe display"""
+    """Создает компактный список файлов с современным стилем для отображения в iframe"""
     if not files:
         return
     
-    # Build file items HTML
+    # Строим HTML элементов файлов
     file_items_html = []
     
     for file_path in files:
@@ -140,7 +141,7 @@ def create_compact_file_list(files):
         )
         file_items_html.append(file_item_html)
     
-    # Render complete file list
+    # Отображаем полный список файлов
     file_list_html = render_template(
         "file_list",
         file_count=len(files),
@@ -151,7 +152,7 @@ def create_compact_file_list(files):
 
 
 def create_results_display(result_path, processing_time):
-    """Create enhanced results display component"""
+    """Создает улучшенный компонент отображения результатов"""
     if not result_path or not Path(result_path).exists():
         return
     
@@ -166,16 +167,16 @@ def create_results_display(result_path, processing_time):
     st.markdown(results_html, unsafe_allow_html=True)
 
 
-# File handling utility functions
+# Утилитарные функции для работы с файлами
 def _transliterate_ru_to_latin(text: str) -> str:
     """
-    Transliterate Russian text to Latin characters.
+    Транслитерирует русский текст в латинские символы.
     
     Args:
-        text: Input text in Russian
+        text: Входной текст на русском языке
     
     Returns:
-        Transliterated text in Latin characters
+        Транслитерированный текст латинскими символами
     """
     mapping = {
         'А': 'A', 'Б': 'B', 'В': 'V', 'Г': 'G', 'Д': 'D', 'Е': 'E', 'Ё': 'E', 
@@ -194,13 +195,13 @@ def _transliterate_ru_to_latin(text: str) -> str:
 
 def _sanitize_stem(stem: str) -> str:
     """
-    Sanitize filename stem for safe filesystem usage.
+    Очищает основу имени файла для безопасного использования в файловой системе.
     
     Args:
-        stem: Filename stem to sanitize
+        stem: Основа имени файла для очистки
     
     Returns:
-        Sanitized filename stem
+        Очищенная основа имени файла
     """
     translit = _transliterate_ru_to_latin(stem)
     translit = translit.strip()
@@ -213,14 +214,14 @@ def _sanitize_stem(stem: str) -> str:
 
 def _make_unique_name(original_name: str, start_index: int) -> tuple[str, int]:
     """
-    Generate a unique filename that doesn't conflict with existing files.
+    Генерирует уникальное имя файла, которое не конфликтует с существующими файлами.
     
     Args:
-        original_name: Original filename
-        start_index: Starting index for numbering
+        original_name: Исходное имя файла
+        start_index: Начальный индекс для нумерации
     
     Returns:
-        Tuple of (unique_filename, used_index)
+        Кортеж (уникальное_имя_файла, использованный_индекс)
     """
     p = Path(original_name)
     base = _sanitize_stem(p.stem)
@@ -235,13 +236,13 @@ def _make_unique_name(original_name: str, start_index: int) -> tuple[str, int]:
 
 def _file_signature(uploaded_file) -> str:
     """
-    Generate a unique signature for an uploaded file.
+    Генерирует уникальную подпись для загруженного файла.
     
     Args:
-        uploaded_file: Streamlit UploadedFile object
+        uploaded_file: Объект UploadedFile Streamlit
     
     Returns:
-        Unique file signature string
+        Строка уникальной подписи файла
     """
     buf = uploaded_file.getbuffer()
     md5 = hashlib.md5(buf).hexdigest()
@@ -249,7 +250,7 @@ def _file_signature(uploaded_file) -> str:
 
 
 def _initialize_session_state():
-    """Initialize Streamlit session state variables."""
+    """Инициализирует переменные состояния сессии Streamlit."""
     if "saved_files" not in st.session_state:
         st.session_state.saved_files = []
     if "processed" not in st.session_state:
@@ -262,10 +263,10 @@ def _initialize_session_state():
 
 def _handle_file_uploads(uploaded_files):
     """
-    Process and save uploaded files to the inbox directory.
+    Обрабатывает и сохраняет загруженные файлы в директорию inbox.
     
     Args:
-        uploaded_files: List of Streamlit UploadedFile objects
+        uploaded_files: Список объектов UploadedFile Streamlit
     """
     if not uploaded_files:
         return
@@ -287,16 +288,16 @@ def _handle_file_uploads(uploaded_files):
 
 
 def _render_processing_settings():
-    """Render the processing settings card and handle processing logic."""
+    """Отображает карточку настроек обработки и обрабатывает логику обработки."""
     settings_card_html = load_template("settings_card")
     st.markdown(settings_card_html, unsafe_allow_html=True)
 
     if st.session_state.saved_files and not st.session_state.processed:
-        # Model selection
+        # Выбор модели
         st.markdown("**🤖 Модель ИИ**")
         model_choice = st.selectbox(
             "Выберите модель",
-            ["Локальная модель Qwen2", "Облачная модель ChatGPT"],
+            ["Локальная модель Qwen 3", "Облачная модель ChatGPT"],
             help="Локальная модель обеспечивает конфиденциальность, облачная - высокую точность",
             label_visibility="collapsed",
         )
@@ -304,7 +305,7 @@ def _render_processing_settings():
         remote_model = model_choice == "Облачная модель ChatGPT"
 
         st.markdown("**📊 Режим обработки**")
-        # Processing mode
+        # Режим обработки
         mode = st.radio(
             "Режим",
             ["Умное распределение", "Упрощенное распределение"],
@@ -314,7 +315,7 @@ def _render_processing_settings():
 
         st.markdown("---")
 
-        # Process button
+        # Кнопка обработки
         if st.button("🚀 Начать обработку", type="primary", use_container_width=True):
             st.session_state.processing_start_time = datetime.now()
 
@@ -325,13 +326,13 @@ def _render_processing_settings():
                     remote_model=remote_model,
                 )
 
-            # Calculate processing time
+            # Вычисляем время обработки
             end_time = datetime.now()
             processing_duration = end_time - st.session_state.processing_start_time
 
             st.success(f"✅ Обработка завершена за {str(processing_duration).split('.')[0]}")
 
-            # Provide download
+            # Предоставляем скачивание
             if result and Path(result).exists():
                 with open(result, "rb") as f:
                     st.download_button(
@@ -343,7 +344,7 @@ def _render_processing_settings():
                         use_container_width=True,
                     )
 
-            # Reset state
+            # Сбрасываем состояние
             st.session_state.saved_files = []
             st.session_state.processed = True
             st.session_state.upload_map = {}
@@ -353,35 +354,35 @@ def _render_processing_settings():
 
 
 def main():
-    """Main application entry point."""
-    # Load custom styling
+    """Главная точка входа в приложение."""
+    # Загружаем пользовательские стили
     load_custom_css()
     
-    # Create compact header
+    # Создаем компактный заголовок
     create_compact_header()
     
-    # Initialize session state
+    # Инициализируем состояние сессии
     _initialize_session_state()
     
-    # Create main content area with balanced grid
+    # Создаем основную область контента со сбалансированной сеткой
     col1, col2 = st.columns([1.2, 1], gap="medium")
     
     with col1:
-        # Single compact drag & drop zone
+        # Единая компактная зона перетаскивания
         uploaded_files = create_compact_upload_component()
         
-        # Process uploaded files
+        # Обрабатываем загруженные файлы
         _handle_file_uploads(uploaded_files)
 
-        # Display uploaded files in compact format
+        # Отображаем загруженные файлы в компактном формате
         if st.session_state.saved_files:
             create_compact_file_list(st.session_state.saved_files)
 
     with col2:
-        # Processing settings card
+        # Карточка настроек обработки
         _render_processing_settings()
 
-    # Reset processed state when new files are uploaded
+    # Сбрасываем состояние обработки при загрузке новых файлов
     if st.session_state.processed and uploaded_files:
         st.session_state.processed = False
 

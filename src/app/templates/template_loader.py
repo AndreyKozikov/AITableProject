@@ -1,6 +1,6 @@
 """
-Template Loader Module
-Handles loading and rendering HTML templates for the Streamlit application.
+Модуль загрузчика шаблонов
+Обрабатывает загрузку и рендеринг HTML шаблонов для приложения Streamlit.
 """
 
 from pathlib import Path
@@ -8,15 +8,15 @@ from typing import Dict, Any
 
 
 class TemplateLoader:
-    """Loads and renders HTML templates from the templates directory."""
+    """Загружает и рендерит HTML шаблоны из директории шаблонов."""
     
     def __init__(self, templates_dir: Path = None):
         """
-        Initialize the template loader.
+        Инициализирует загрузчик шаблонов.
         
         Args:
-            templates_dir: Path to the templates directory. 
-                          If None, uses the directory of this file.
+            templates_dir: Путь к директории шаблонов. 
+                          Если None, используется директория этого файла.
         """
         if templates_dir is None:
             templates_dir = Path(__file__).parent
@@ -25,85 +25,85 @@ class TemplateLoader:
     
     def load_template(self, template_name: str) -> str:
         """
-        Load a template file from the templates directory.
+        Загружает файл шаблона из директории шаблонов.
         
         Args:
-            template_name: Name of the template file (without .html extension)
+            template_name: Имя файла шаблона (без расширения .html)
         
         Returns:
-            Template content as string
+            Содержимое шаблона в виде строки
         """
-        # Check cache first
+        # Проверяем кэш сначала
         if template_name in self._cache:
             return self._cache[template_name]
         
-        # Load from file
+        # Загружаем из файла
         template_path = self.templates_dir / f"{template_name}.html"
         
         if not template_path.exists():
             raise FileNotFoundError(
-                f"Template '{template_name}' not found at {template_path}"
+                f"Шаблон '{template_name}' не найден по пути {template_path}"
             )
         
         with open(template_path, "r", encoding="utf-8") as f:
             content = f.read()
         
-        # Cache the template
+        # Кэшируем шаблон
         self._cache[template_name] = content
         
         return content
     
     def render_template(self, template_name: str, **kwargs: Any) -> str:
         """
-        Load and render a template with the provided variables.
+        Загружает и рендерит шаблон с предоставленными переменными.
         
         Args:
-            template_name: Name of the template file (without .html extension)
-            **kwargs: Variables to substitute in the template
+            template_name: Имя файла шаблона (без расширения .html)
+            **kwargs: Переменные для подстановки в шаблон
         
         Returns:
-            Rendered template as string
+            Отрендеренный шаблон в виде строки
         """
         template = self.load_template(template_name)
         return template.format(**kwargs)
     
     def clear_cache(self):
-        """Clear the template cache."""
+        """Очищает кэш шаблонов."""
         self._cache.clear()
 
 
-# Global template loader instance
+# Глобальный экземпляр загрузчика шаблонов
 _template_loader = TemplateLoader()
 
 
 def get_template_loader() -> TemplateLoader:
-    """Get the global template loader instance."""
+    """Получает глобальный экземпляр загрузчика шаблонов."""
     return _template_loader
 
 
 def render_template(template_name: str, **kwargs: Any) -> str:
     """
-    Convenience function to render a template using the global loader.
+    Удобная функция для рендеринга шаблона используя глобальный загрузчик.
     
     Args:
-        template_name: Name of the template file (without .html extension)
-        **kwargs: Variables to substitute in the template
+        template_name: Имя файла шаблона (без расширения .html)
+        **kwargs: Переменные для подстановки в шаблон
     
     Returns:
-        Rendered template as string
+        Отрендеренный шаблон в виде строки
     """
     return _template_loader.render_template(template_name, **kwargs)
 
 
 def load_template(template_name: str) -> str:
     """
-    Convenience function to load a template using the global loader.
+    Удобная функция для загрузки шаблона используя глобальный загрузчик.
     
     Args:
-        template_name: Name of the template file (without .html extension)
+        template_name: Имя файла шаблона (без расширения .html)
     
     Returns:
-        Template content as string
+        Содержимое шаблона в виде строки
     """
     return _template_loader.load_template(template_name)
 

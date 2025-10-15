@@ -26,20 +26,20 @@ tokenizer = None
 
 
 def load_model() -> None:
-    """Load LLaMA2 model and tokenizer.
+    """Загружает модель LLaMA2 и токенизатор.
     
-    Initializes the global model and tokenizer variables if they haven't been
-    loaded yet. Uses appropriate device (CUDA/CPU) and data type.
+    Инициализирует глобальные переменные модели и токенизатора, если они еще не
+    были загружены. Использует подходящее устройство (CUDA/CPU) и тип данных.
     
     Raises:
-        Exception: If model loading fails.
+        Exception: Если загрузка модели не удалась.
     """
     global model, tokenizer
     
     try:
         if model is None or tokenizer is None:
-            logger.info(f"Loading LLaMA2 model: {MODEL_ID}")
-            logger.info(f"Using device: {DEVICE}, dtype: {TORCH_DTYPE}")
+            logger.info(f"Загрузка модели LLaMA2: {MODEL_ID}")
+            logger.info(f"Используемое устройство: {DEVICE}, тип данных: {TORCH_DTYPE}")
             
             tokenizer = LlamaTokenizer.from_pretrained(MODEL_ID)
             model = LlamaForCausalLM.from_pretrained(
@@ -49,24 +49,24 @@ def load_model() -> None:
             )
             model.to(DEVICE)
             
-            logger.info("LLaMA2 model and tokenizer loaded successfully")
+            logger.info("Модель LLaMA2 и токенизатор загружены успешно")
             
     except Exception as e:
-        logger.error(f"Failed to load LLaMA2 model: {e}")
+        logger.error(f"Не удалось загрузить модель LLaMA2: {e}")
         raise
 
 
 def tokens_count_llama(text: str) -> int:
-    """Count tokens in text using LLaMA2 tokenizer.
+    """Подсчитывает токены в тексте используя токенизатор LLaMA2.
     
     Args:
-        text: Text to count tokens for.
+        text: Текст для подсчета токенов.
         
     Returns:
-        Number of tokens in the text.
+        Количество токенов в тексте.
         
     Raises:
-        Exception: If tokenizer loading fails.
+        Exception: Если загрузка токенизатора не удалась.
     """
     global tokenizer
     
@@ -74,13 +74,13 @@ def tokens_count_llama(text: str) -> int:
         if tokenizer is None:
             load_model()
         
-        logger.debug(f"Counting tokens for text with {len(text)} characters")
+        logger.debug(f"Подсчет токенов для текста с {len(text)} символами")
         tokens = tokenizer.encode(text, add_special_tokens=False)
         token_count = len(tokens)
-        logger.debug(f"Token count: {token_count}")
+        logger.debug(f"Количество токенов: {token_count}")
         return token_count
     except Exception as e:
-        logger.error(f"Error counting tokens: {e}")
+        logger.error(f"Ошибка при подсчете токенов: {e}")
         raise
 
 
@@ -88,27 +88,27 @@ def ask_llama2(question: str,
                tables_text: str, 
                header: str, 
                max_new_tokens: int = 2048) -> str:
-    """Query LLaMA2 model for table processing.
+    """Запрашивает модель LLaMA2 для обработки таблиц.
     
-    Process table data using LLaMA2. Note: LLaMA2 is a text-only model,
-    so images need to be processed separately and inserted as text.
+    Обрабатывает данные таблиц используя LLaMA2. Примечание: LLaMA2 - это только текстовая модель,
+    поэтому изображения нужно обрабатывать отдельно и вставлять как текст.
     
     Args:
-        question: Question or instruction for the model.
-        tables_text: Table data in text format.
-        header: Column headers for the table.
-        max_new_tokens: Maximum number of tokens to generate.
+        question: Вопрос или инструкция для модели.
+        tables_text: Данные таблицы в текстовом формате.
+        header: Заголовки столбцов для таблицы.
+        max_new_tokens: Максимальное количество токенов для генерации.
         
     Returns:
-        Generated response from the model.
+        Сгенерированный ответ от модели.
         
     Raises:
-        Exception: If model inference fails.
+        Exception: Если инференс модели не удался.
     """
-    logger.info(f"Starting LLaMA2 inference")
-    logger.info(f"Question length: {len(question)}, "
-                f"Tables text length: {len(tables_text)}, "
-                f"Header: {header}")
+    logger.info(f"Начало инференса LLaMA2")
+    logger.info(f"Длина вопроса: {len(question)}, "
+                f"Длина текста таблиц: {len(tables_text)}, "
+                f"Заголовок: {header}")
     
     try:
         load_model()
@@ -134,15 +134,15 @@ def ask_llama2(question: str,
 Ответ (только таблица в Markdown):
 """
         
-        logger.debug(f"Full prompt length: {len(prompt)} characters")
-        logger.debug(f"Prompt preview: {prompt[:300]}...")
+        logger.debug(f"Полная длина промпта: {len(prompt)} символов")
+        logger.debug(f"Превью промпта: {prompt[:300]}...")
         
         # Токенизация
         inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=4096)
         inputs = inputs.to(DEVICE)
         
-        logger.info(f"Running model inference with max_new_tokens: {max_new_tokens}")
-        logger.debug(f"Input token count: {inputs.input_ids.shape[1]}")
+        logger.info(f"Запуск инференса модели с max_new_tokens: {max_new_tokens}")
+        logger.debug(f"Количество входных токенов: {inputs.input_ids.shape[1]}")
         
         # Генерация ответа
         with torch.no_grad():
@@ -162,11 +162,11 @@ def ask_llama2(question: str,
             skip_special_tokens=True
         )
         
-        logger.info(f"Model inference completed. Generated {len(generated_text)} characters")
-        logger.debug(f"Generated text preview: {generated_text[:200]}...")
+        logger.info(f"Инференс модели завершен. Сгенерировано {len(generated_text)} символов")
+        logger.debug(f"Превью сгенерированного текста: {generated_text[:200]}...")
         
         return generated_text.strip()
         
     except Exception as e:
-        logger.error(f"Error in LLaMA2 inference: {e}")
+        logger.error(f"Ошибка в инференсе LLaMA2: {e}")
         raise
