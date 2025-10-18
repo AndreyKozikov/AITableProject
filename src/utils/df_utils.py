@@ -170,52 +170,261 @@ def is_header_row_semantic(
         return False
 
 
-def reconstruct_table_from_ocr(
-    json_data: dict,
-    image_width: int = 1200,
-    min_gap_width: int = 10
-) -> pd.DataFrame:
-    """Reconstruct table structure from OCR results based on spatial analysis.
-    
-    This function rebuilds tabular structure from OCR bounding boxes and texts
-    by analyzing the spatial distribution of text blocks to determine column
-    boundaries and row positions.
+def _calculate_iou(box1: list, box2: list) -> float:
+    """Calculate Intersection over Union (IoU) between two bounding boxes.
     
     Args:
-        json_data: Dictionary containing OCR results with 'rec_boxes' and 'rec_texts'.
-                  Expected structure: {'rec_boxes': [[x1,y1,x2,y2], ...], 'rec_texts': [...]}
+        box1: First bounding box [x1, y1, x2, y2]
+        box2: Second bounding box [x1, y1, x2, y2]
+        
+    Returns:
+        IoU value (intersection area / union area), range [0, 1]
+    """
+    # Calculate intersection area
+    x1 = max(box1[0], box2[0])
+    y1 = max(box1[1], box2[1])
+    x2 = min(box1[2], box2[2])
+    y2 = min(box1[3], box2[3])
+    
+    # Check if boxes intersect
+    if x2 < x1 or y2 < y1:
+        return 0.0
+    
+    intersection = (x2 - x1) * (y2 - y1)
+    
+    # Calculate union area
+    area1 = (box1[2] - box1[0]) * (box1[3] - box1[1])
+    area2 = (box2[2] - box2[0]) * (box2[3] - box2[1])
+    union = area1 + area2 - intersection
+    
+    # Avoid division by zero
+    if union <= 0:
+        return 0.0
+    
+    return intersection / union
+
+
+def _merge_ocr_blocks_by_cells(json_data: dict, iou_threshold: float = 0.05) -> tuple:
+    """Merge OCR blocks based on table cell coordinates from PPStructure V3.
+    
+    This private helper method aggregates OCR text blocks according to detected
+    table cell boundaries using a two-stage strategy:
+    1. Fast filtering: Check if OCR block center is inside cell
+    2. IoU matching: For unmatched blocks, use Intersection over Union
+    
+    Args:
+        json_data: Dictionary containing PPStructure V3 results with:
+                  - 'table_res_list': List of table recognition results
+                  - 'overall_ocr_res': OCR detection results with 'rec_boxes' and 'rec_texts'
+        iou_threshold: Minimum IoU value to assign block to cell (default: 0.05)
+                  
+    Returns:
+        Tuple of (merged_rec_boxes, merged_rec_texts) where each element corresponds
+        to one table cell, or (None, None) if merging is not applicable.
+        
+    Algorithm:
+        1. Extract cell coordinates from table_res_list
+        2. Extract OCR boxes and texts from overall_ocr_res
+        3. Stage 1: Match blocks by center-in-cell criterion (fast)
+        4. Stage 2: Match remaining blocks by IoU (accurate)
+        5. Sort blocks within each cell by position
+        6. Smart text merging: space for same line, newline for different lines
+        7. Use cell coordinates as merged block coordinates
+    """
+    try:
+        # Check if table_res_list exists
+        table_res_list = json_data.get('table_res_list', [])
+        if len(table_res_list) == 0:
+            logger.debug("No table_res_list found, skipping OCR block merging")
+            return None, None
+        
+        # Get the first table (support for multiple tables can be added later)
+        table_res = table_res_list[0]
+        cell_box_list = table_res.get('cell_box_list', [])
+        
+        if len(cell_box_list) == 0:
+            logger.debug("No cell_box_list found in table_res, skipping OCR block merging")
+            return None, None
+        
+        # Extract OCR boxes and texts from overall_ocr_res
+        overall_ocr_res = json_data.get('overall_ocr_res', {})
+        rec_boxes = overall_ocr_res.get('rec_boxes', [])
+        rec_texts = overall_ocr_res.get('rec_texts', [])
+        
+        if len(rec_boxes) == 0 or len(rec_texts) == 0:
+            logger.debug("No rec_boxes or rec_texts in overall_ocr_res")
+            return None, None
+        
+        logger.info(f"Merging {len(rec_boxes)} OCR blocks into {len(cell_box_list)} table cells")
+        
+        # Statistics counters
+        matched_by_center = 0
+        matched_by_iou = 0
+        unmatched_blocks = 0
+        
+        # Track which OCR blocks have been assigned to cells
+        assigned_blocks = set()
+        
+        # Dictionary to store blocks for each cell
+        cell_blocks = {cell_idx: [] for cell_idx in range(len(cell_box_list))}
+        
+        # Stage 1: Match by center criterion (fast filtering)
+        for box_idx, (ocr_box, ocr_text) in enumerate(zip(rec_boxes, rec_texts)):
+            if len(ocr_box) != 4:
+                continue
+            
+            ocr_x1, ocr_y1, ocr_x2, ocr_y2 = ocr_box
+            center_x = (ocr_x1 + ocr_x2) / 2
+            center_y = (ocr_y1 + ocr_y2) / 2
+            
+            # Check each cell
+            for cell_idx, cell_box in enumerate(cell_box_list):
+                cell_x1, cell_y1, cell_x2, cell_y2 = cell_box
+                
+                if (cell_x1 <= center_x <= cell_x2 and 
+                    cell_y1 <= center_y <= cell_y2):
+                    cell_blocks[cell_idx].append({
+                        'index': box_idx,
+                        'box': [ocr_x1, ocr_y1, ocr_x2, ocr_y2],
+                        'text': ocr_text,
+                        'center_y': center_y,
+                        'center_x': center_x,
+                        'method': 'center'
+                    })
+                    assigned_blocks.add(box_idx)
+                    matched_by_center += 1
+                    break  # Block assigned, move to next
+        
+        # Stage 2: Match remaining blocks by IoU
+        for box_idx, (ocr_box, ocr_text) in enumerate(zip(rec_boxes, rec_texts)):
+            if box_idx in assigned_blocks or len(ocr_box) != 4:
+                continue
+            
+            ocr_x1, ocr_y1, ocr_x2, ocr_y2 = ocr_box
+            center_x = (ocr_x1 + ocr_x2) / 2
+            center_y = (ocr_y1 + ocr_y2) / 2
+            
+            # Calculate IoU with all cells
+            best_iou = 0.0
+            best_cell_idx = -1
+            
+            for cell_idx, cell_box in enumerate(cell_box_list):
+                iou = _calculate_iou([ocr_x1, ocr_y1, ocr_x2, ocr_y2], cell_box)
+                if iou > best_iou:
+                    best_iou = iou
+                    best_cell_idx = cell_idx
+            
+            # Assign to cell if IoU exceeds threshold
+            if best_iou >= iou_threshold and best_cell_idx >= 0:
+                cell_blocks[best_cell_idx].append({
+                    'index': box_idx,
+                    'box': [ocr_x1, ocr_y1, ocr_x2, ocr_y2],
+                    'text': ocr_text,
+                    'center_y': center_y,
+                    'center_x': center_x,
+                    'method': 'iou',
+                    'iou': best_iou
+                })
+                assigned_blocks.add(box_idx)
+                matched_by_iou += 1
+            else:
+                unmatched_blocks += 1
+        
+        # Build merged results
+        merged_boxes = []
+        merged_texts = []
+        
+        for cell_idx, cell_box in enumerate(cell_box_list):
+            blocks = cell_blocks[cell_idx]
+            
+            if not blocks:
+                # Empty cell
+                merged_texts.append('')
+                merged_boxes.append(list(cell_box))
+                continue
+            
+            # Sort blocks by vertical position, then horizontal
+            blocks.sort(key=lambda b: (b['center_y'], b['center_x']))
+            
+            # Smart text merging: detect line breaks
+            combined_parts = []
+            prev_y = None
+            
+            for block in blocks:
+                current_y = block['center_y']
+                
+                # Determine if this is a new line (significant vertical gap)
+                if prev_y is not None:
+                    y_gap = abs(current_y - prev_y)
+                    # If gap is larger than ~10 pixels, consider it a new line
+                    if y_gap > 10:
+                        combined_parts.append('\n')
+                    elif combined_parts:  # Same line, add space
+                        combined_parts.append(' ')
+                
+                combined_parts.append(block['text'])
+                prev_y = current_y
+            
+            combined_text = ''.join(combined_parts)
+            merged_texts.append(combined_text)
+            merged_boxes.append(list(cell_box))
+        
+        # Log statistics
+        logger.info(
+            f"OCR block merging completed: {len(rec_boxes)} blocks -> {len(merged_boxes)} cells"
+        )
+        logger.info(
+            f"  Matched by center: {matched_by_center}, "
+            f"by IoU: {matched_by_iou}, "
+            f"unmatched: {unmatched_blocks}"
+        )
+        
+        if matched_by_iou > 0:
+            logger.debug(
+                f"IoU threshold {iou_threshold} helped match {matched_by_iou} additional blocks"
+            )
+        
+        return merged_boxes, merged_texts
+        
+    except Exception as e:
+        logger.error(f"Error in _merge_ocr_blocks_by_cells: {e}", exc_info=True)
+        return None, None
+
+
+def _detect_table_columns(
+    rec_boxes: list,
+    image_width: int = 1200,
+    min_gap_width: int = 10
+) -> List[int]:
+    """Detect table column boundaries using density map analysis.
+    
+    This private helper method analyzes the horizontal distribution of OCR boxes
+    to identify vertical gaps that serve as column separators.
+    
+    Args:
+        rec_boxes: List of bounding boxes [[x1, y1, x2, y2], ...]
         image_width: Width of the analyzed image in pixels for density map.
         min_gap_width: Minimum width of empty zone to be considered a column boundary.
         
     Returns:
-        DataFrame with reconstructed table structure.
+        List of x-coordinates representing column boundaries (vertical separators).
+        Empty list if no boundaries found.
         
     Algorithm:
-        1. Build density map across image width
-        2. Find continuous zero zones (gaps) as column boundaries
-        3. Calculate block centers (x_center, y_center)
-        4. Distribute blocks into columns based on x_center
-        5. Sort blocks within columns by y_center
-        6. Align rows across columns by maximum row count
+        1. Build horizontal density map across image width
+        2. Identify continuous zero zones (gaps without text)
+        3. Filter gaps by minimum width threshold
+        4. Return midpoint of each valid gap as boundary
     """
     try:
-        logger.debug(f"Starting table reconstruction from OCR data (image_width={image_width})")
-        
-        # Extract boxes and texts from json_data
-        boxes = json_data.get('rec_boxes', [])
-        texts = json_data.get('rec_texts', [])
-        
-        if len(boxes) == 0 or len(texts) == 0:
-            logger.warning("No OCR boxes or texts found in data")
-            return pd.DataFrame()
-        
-        logger.info(f"Processing {len(boxes)} OCR blocks")
-        
         # Step 1: Build density map
         density = np.zeros(image_width, dtype=int)
-        for (x1, y1, x2, y2) in boxes:
-            x1_int, x2_int = int(max(0, x1)), int(min(image_width - 1, x2))
-            density[x1_int:x2_int] += 1
+        for box in rec_boxes:
+            if len(box) == 4:
+                x1, y1, x2, y2 = box
+                x1_int = int(max(0, x1))
+                x2_int = int(min(image_width - 1, x2))
+                density[x1_int:x2_int] += 1
         
         logger.debug(f"Density map built with max density: {density.max()}")
         
@@ -236,11 +445,84 @@ def reconstruct_table_from_ocr(
                     boundaries.append(middle)
         
         # Check if last gap extends to image edge
-        if in_gap and (image_width - start) > min_gap_width:
+        if in_gap and start is not None and (image_width - start) > min_gap_width:
             middle = int((start + image_width) / 2)
             boundaries.append(middle)
         
-        logger.info(f"Found {len(boundaries)} column boundaries: {boundaries}")
+        logger.info(f"Detected {len(boundaries)} column boundaries at x-positions: {boundaries}")
+        
+        return boundaries
+        
+    except Exception as e:
+        logger.error(f"Error detecting table columns: {e}", exc_info=True)
+        return []
+
+
+def reconstruct_table_from_ocr(
+    json_data: dict,
+    image_width: int = 1200,
+    min_gap_width: int = 10
+) -> pd.DataFrame:
+    """Reconstruct table structure from OCR results based on spatial analysis.
+    
+    This function rebuilds tabular structure from OCR bounding boxes and texts
+    by analyzing the spatial distribution of text blocks to determine column
+    boundaries and row positions.
+    
+    Args:
+        json_data: Dictionary containing OCR results with 'rec_boxes' and 'rec_texts'.
+                  Expected structure: {'rec_boxes': [[x1,y1,x2,y2], ...], 'rec_texts': [...]}
+                  Optionally contains 'table_res_list' for cell-based merging.
+        image_width: Width of the analyzed image in pixels for density map.
+        min_gap_width: Minimum width of empty zone to be considered a column boundary.
+        
+    Returns:
+        DataFrame with reconstructed table structure.
+        
+    Algorithm:
+        1. Detect column boundaries from original OCR data
+        2. Merge OCR blocks by table cells (if available)
+        3. Calculate block centers (x_center, y_center)
+        4. Distribute blocks into columns based on detected boundaries
+        5. Sort blocks within columns by y_center
+        6. Align rows across columns by maximum row count
+    """
+    try:
+        logger.debug(f"Starting table reconstruction from OCR data (image_width={image_width})")
+        
+        # Extract original boxes and texts for column detection
+        original_boxes = json_data.get('rec_boxes', [])
+        original_texts = json_data.get('rec_texts', [])
+        
+        if len(original_boxes) == 0 or len(original_texts) == 0:
+            logger.warning("No OCR boxes or texts found in data")
+            return pd.DataFrame()
+        
+        # Step 1: Detect column boundaries from original OCR data
+        boundaries = _detect_table_columns(
+            original_boxes,
+            image_width=image_width,
+            min_gap_width=min_gap_width
+        )
+        
+        # Step 2: Try to merge OCR blocks by table cells (if available)
+        merged_boxes, merged_texts = _merge_ocr_blocks_by_cells(json_data)
+        
+        # Determine which data to use for table reconstruction
+        if merged_boxes is not None and merged_texts is not None:
+            logger.info("Using cell-merged OCR data for table reconstruction")
+            boxes = merged_boxes
+            texts = merged_texts
+        else:
+            logger.debug("Using original OCR data for table reconstruction")
+            boxes = original_boxes
+            texts = original_texts
+        
+        if len(boxes) == 0 or len(texts) == 0:
+            logger.warning("No boxes or texts after processing")
+            return pd.DataFrame()
+        
+        logger.info(f"Processing {len(boxes)} blocks for table reconstruction")
         
         # Step 3: Calculate block centers
         blocks = []
