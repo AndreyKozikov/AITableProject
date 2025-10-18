@@ -22,6 +22,7 @@ ROOT = Path(__file__).resolve().parents[1]
 INBOX_DIR = ROOT.parent / "inbox"
 PARSING_DIR = ROOT.parent / "parsing_files"
 OUT_DIR = ROOT.parent / "out"
+OUT_DIR_LEARNING_DATA = ROOT / "learning" / "datasets"
 MODEL_DIR = ROOT.parent / "model_table"
 
 # ==================== ПАРСИНГ ТАБЛИЦ ====================
@@ -181,5 +182,5 @@ PPSTRUCTURE_TEXT_REC_SCORE_THRESH = 0.4  # Минимальный порог у�
 PPSTRUCTURE_USE_TABLE_RECOGNITION = True  # Включить модуль распознавания таблиц
 
 # ==================== ИНИЦИАЛИЗАЦИЯ ДИРЕКТОРИЙ ====================
-for d in (INBOX_DIR, PARSING_DIR, OUT_DIR):
+for d in (INBOX_DIR, PARSING_DIR, OUT_DIR, OUT_DIR_LEARNING_DATA):
     d.mkdir(exist_ok=True)

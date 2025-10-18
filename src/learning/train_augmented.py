@@ -35,7 +35,7 @@ def augment_example(example, n_aug=3):
 
 
 # Пример использования
-file_path = "./data/train_augmented.jsonl"
+file_path = "datasets/data/train_augmented.jsonl"
 dataset = []
 with open(file_path, "r", encoding="utf-8") as f:
     for line in f:

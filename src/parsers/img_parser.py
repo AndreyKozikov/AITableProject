@@ -179,9 +179,9 @@ def image_ocr(image_path: Path) -> List[Path]:
         logger.info("Выполнение предсказания структуры таблицы...")
         results = table_engine.predict(image)
         
-        for res in results:
-            res.save_to_img(save_path=PARSING_DIR)
-            res.save_to_json(save_path=PARSING_DIR)
+        # for res in results:
+        #     res.save_to_img(save_path=PARSING_DIR)
+        #     res.save_to_json(save_path=PARSING_DIR)
 
 
         # Get image dimensions for reconstruction
