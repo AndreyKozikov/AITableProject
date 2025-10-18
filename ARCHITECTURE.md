@@ -458,27 +458,6 @@ parsing_files/ (JSON результаты)
    (Excel файлы для обучения)
 ```
 
-### Автоматическая подстройка ширины столбцов
-
-Используется openpyxl для настройки ширины после создания Excel:
-
-```python
-# Загрузка файла
-wb = load_workbook(excel_path)
-
-# Для каждого столбца
-for column in ws.columns:
-    max_length = max(len(str(cell.value)) for cell in column)
-    ws.column_dimensions[column_letter].width = min(max(max_length + 2, 10), 100)
-
-# Сохранение
-wb.save(excel_path)
-```
-
-**Параметры ширины:**
-- Минимум: 10 символов
-- Максимум: 100 символов
-- Запас: +2 символа от максимальной длины
 
 ---
 
