@@ -1,7 +1,9 @@
-"""Модуль утилит для работы с DataFrame.
+"""DataFrame Utilities Module.
 
-Этот модуль предоставляет утилиты для обработки DataFrame, определения заголовков,
-очистки данных и файловых операций для проекта AITableProject.
+Модуль утилит для работы с DataFrame.
+
+This module provides utilities for DataFrame processing, header detection,
+data cleaning, and file operations for the AITableProject.
 """
 
 import csv
@@ -43,8 +45,6 @@ def is_header_row_semantic(
         import numpy as np
     except ImportError:
         logger.warning(
-            "sentence-transformers не установлен. "
-            "Установите с помощью: pip install sentence-transformers"
             "sentence-transformers не установлен. "
             "Установите командой: pip install sentence-transformers"
         )
