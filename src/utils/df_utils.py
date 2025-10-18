@@ -546,7 +546,10 @@ def reconstruct_table_from_ocr(
         3. Вычисление центров блоков (x_center, y_center)
         4. Распределение блоков по столбцам на основе обнаруженных границ
         5. Сортировка блоков внутри столбцов по y_center
-        6. Выравнивание строк по столбцам по максимальному количеству строк
+        6. Определение количества строк в каждом столбце
+        7. Построение таблицы:
+           - Если все столбцы имеют одинаковое количество строк: прямое объединение по индексу
+           - Если количество строк различается: выравнивание с пустыми ячейками
     """
     try:
         logger.debug(f"Начало восстановления таблицы из OCR данных (ширина_изображения={image_width})")
@@ -606,22 +609,46 @@ def reconstruct_table_from_ocr(
         for col in columns:
             col.sort(key=lambda x: x[0])
         
-        # Шаг 6: Построение таблицы с выравниванием строк
-        max_rows = max(len(col) for col in columns) if columns else 0
+        # Шаг 6: Определение количества строк в каждом столбце
+        column_row_counts = [len(col) for col in columns]
+        max_rows = max(column_row_counts) if column_row_counts else 0
         
         if max_rows == 0:
             logger.warning("В таблице не найдено строк")
             return pd.DataFrame()
         
-        table = []
-        for i in range(max_rows):
-            row = []
-            for col in columns:
-                if i < len(col):
-                    row.append(col[i][1])  # Добавляем текст
-                else:
-                    row.append("")  # Пустая ячейка
-            table.append(row)
+        # Проверка на одинаковое количество строк во всех столбцах
+        all_equal_rows = len(set(column_row_counts)) == 1
+        
+        if all_equal_rows:
+            logger.info(
+                f"Все {num_columns} столбца содержат одинаковое количество строк ({max_rows}), "
+                f"используется прямое объединение по индексу"
+            )
+            
+            # Прямое объединение строк по индексу
+            table = []
+            for i in range(max_rows):
+                row = []
+                for col in columns:
+                    row.append(col[i][1])  # Добавляем текст (все столбцы имеют элемент с индексом i)
+                table.append(row)
+        else:
+            logger.info(
+                f"Столбцы имеют различное количество строк: {column_row_counts}, "
+                f"используется выравнивание с пустыми ячейками"
+            )
+            
+            # Объединение с учетом различного количества строк
+            table = []
+            for i in range(max_rows):
+                row = []
+                for col in columns:
+                    if i < len(col):
+                        row.append(col[i][1])  # Добавляем текст
+                    else:
+                        row.append("")  # Пустая ячейка для отсутствующих элементов
+                table.append(row)
         
         df = pd.DataFrame(table)
         logger.info(f"Таблица восстановлена с формой: {df.shape}")
