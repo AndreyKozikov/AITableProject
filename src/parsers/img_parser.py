@@ -180,6 +180,12 @@ def image_ocr(image_path: Path) -> List[Path]:
         results = table_engine.predict(image)
         
         # Получаем размеры изображения для реконструкции
+        for res in results:
+            res.save_to_img(save_path=PARSING_DIR)
+            res.save_to_json(save_path=PARSING_DIR)
+
+
+        # Get image dimensions for reconstruction
         image_width = image.shape[1] if hasattr(image, 'shape') else 1200
         logger.debug(f"Ширина изображения для реконструкции таблицы: {image_width}")
 
@@ -218,9 +224,12 @@ def image_ocr(image_path: Path) -> List[Path]:
             
             try:
                 # Reconstruct table from OCR geometry
+                # Pass full result structure for cell-based merging support
                 ocr_data = {
                     'rec_boxes': rec_boxes,
-                    'rec_texts': rec_texts
+                    'rec_texts': rec_texts,
+                    'table_res_list': r.get('table_res_list', []),
+                    'overall_ocr_res': overall_ocr_res
                 }
                 
                 df = reconstruct_table_from_ocr(ocr_data, image_width=image_width)
