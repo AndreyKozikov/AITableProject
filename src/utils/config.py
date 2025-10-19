@@ -42,6 +42,17 @@ HEADER_ANCHORS: List[Tuple[str, List[str]]] = [
 # ==================== МАППИНГ ДАННЫХ ====================
 # Используется в: mapper.py, ask_qwen3_so.py
 
+# Модель Qwen для структурированного вывода
+# ID модели на HuggingFace Hub (для загрузки)
+MODEL_ID = "Qwen/Qwen3-1.7B"
+
+# Локальная директория для хранения модели
+MODEL_CACHE_DIR = ROOT.parent / "models" / "qwen"
+
+# Использовать локальную модель (если True, загружает из MODEL_CACHE_DIR)
+# Если False, загружает напрямую из HuggingFace Hub
+USE_LOCAL_MODEL = True
+
 PROMPT_TEMPLATE = """
 Ты — ассистент по обработке табличных данных.
 Формат выходных данных: **только таблица в Markdown**, без пояснений и заголовков.
@@ -182,5 +193,5 @@ PPSTRUCTURE_TEXT_REC_SCORE_THRESH = 0.4  # Минимальный порог у�
 PPSTRUCTURE_USE_TABLE_RECOGNITION = True  # Включить модуль распознавания таблиц
 
 # ==================== ИНИЦИАЛИЗАЦИЯ ДИРЕКТОРИЙ ====================
-for d in (INBOX_DIR, PARSING_DIR, OUT_DIR, OUT_DIR_LEARNING_DATA):
-    d.mkdir(exist_ok=True)
+for d in (INBOX_DIR, PARSING_DIR, OUT_DIR, OUT_DIR_LEARNING_DATA, MODEL_CACHE_DIR):
+    d.mkdir(exist_ok=True, parents=True)

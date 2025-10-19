@@ -23,15 +23,17 @@ import torch
 from pydantic import BaseModel, Field, create_model
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from src.utils.config import MODEL_DIR, PROMPT_TEMPLATE_SO
+from src.utils.config import MODEL_DIR, PROMPT_TEMPLATE_SO, MODEL_ID, MODEL_CACHE_DIR, USE_LOCAL_MODEL
 from src.utils.logging_config import get_logger
 
 # Получение настроенного логгера
 logger = get_logger(__name__)
 
-MODEL_ID = "Qwen/Qwen3-1.7B"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 TORCH_DTYPE = torch.bfloat16 if DEVICE == "cuda" else torch.float32
+
+# Определяем путь к модели в зависимости от настроек
+MODEL_PATH = str(MODEL_CACHE_DIR) if USE_LOCAL_MODEL else MODEL_ID
 
 # Глобальные переменные для модели
 model = None
@@ -212,10 +214,11 @@ def get_table_models(extended: bool = False) -> tuple[Type[BaseModel], Type[Base
 
 
 def load_model() -> None:
-    """Load Qwen3 model and tokenizer.
+    """Load Qwen model and tokenizer.
     
     Initializes the global model and tokenizer variables if they haven't been
     loaded yet. Uses appropriate device (CUDA/CPU) and data type.
+    Loads from local cache if USE_LOCAL_MODEL is True, otherwise from HuggingFace Hub.
     
     Raises:
         Exception: If model loading fails.
@@ -224,21 +227,29 @@ def load_model() -> None:
     
     try:
         if model is None or tokenizer is None:
-            logger.info(f"Loading Qwen3 model for structured output: {MODEL_ID}")
+            source = "local cache" if USE_LOCAL_MODEL else "HuggingFace Hub"
+            logger.info(f"Loading Qwen model for structured output from {source}")
+            logger.info(f"Model path: {MODEL_PATH}")
             logger.info(f"Using device: {DEVICE}, dtype: {TORCH_DTYPE}")
             
-            tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
+            tokenizer = AutoTokenizer.from_pretrained(
+                MODEL_PATH,
+                trust_remote_code=True
+            )
             model = AutoModelForCausalLM.from_pretrained(
-                MODEL_ID,
+                MODEL_PATH,
                 torch_dtype=TORCH_DTYPE,
                 device_map="auto" if torch.cuda.is_available() else None,
                 trust_remote_code=True
             )
             
-            logger.info("Qwen3 model and tokenizer loaded successfully for structured output")
+            logger.info(f"Qwen model and tokenizer loaded successfully from {source}")
             
     except Exception as e:
-        logger.error(f"Failed to load Qwen3 model: {e}")
+        logger.error(f"Failed to load Qwen model: {e}")
+        if USE_LOCAL_MODEL:
+            logger.error(f"Model not found in local cache: {MODEL_CACHE_DIR}")
+            logger.error(f"Run 'python src/utils/download_model.py' to download the model")
         raise
 
 
