@@ -164,55 +164,36 @@ def load_training_dataset(data_path):
     return dataset
 
 
-def tokenize_function(example, tokenizer):
+def tokenize_function(example, idx, tokenizer):
     """
-    Токенизирует один пример из датасета.
+    Токенизирует один пример из датасета отдельно.
     
-    Использует apply_chat_template для форматирования сообщений.
-    Маскирует промпт в labels (значения -100), чтобы модель обучалась
-    только на генерации ответа.
+    Каждая запись (system + user + assistant) токенизируется независимо как один обучающий sample.
+    Никакого объединения нескольких записей в один контекст.
+    Маскирует system + user в labels (-100), оставляя только assistant для обучения.
     
     Args:
-        example: Словарь с полями 'system', 'user', 'assistant'
+        example: Словарь с полями 'mode', 'system', 'user', 'assistant'
+        idx: Индекс примера в датасете
         tokenizer: Токенизатор модели
         
     Returns:
-        Словарь с токенизированными данными
+        Словарь с токенизированными данными (input_ids, attention_mask, labels)
     """
+    # Извлекаем mode
+    mode = example.get("mode", "unknown")
+    
     # Преобразуем assistant из dict в JSON строку, если это dict
     assistant_text = example['assistant']
     if isinstance(assistant_text, dict):
         assistant_text = json.dumps(assistant_text, ensure_ascii=False, separators=(',', ':'))
     
-    # Формируем messages для chat template
-    messages = [
-        {"role": "system", "content": example['system']},
-        {"role": "user", "content": example['user']},
-        {"role": "assistant", "content": assistant_text}
-    ]
+    # Формируем system prompt с указанием режима работы (один раз)
+    system_prompt = f"Режим работы: {mode}. {example['system']}"
     
-    # Применяем chat template без generation prompt (для обучения)
-    full_text = tokenizer.apply_chat_template(
-        messages,
-        tokenize=False,
-        add_generation_prompt=False
-    )
-    
-    # Токенизируем весь текст
-    tokenized = tokenizer(
-        full_text,
-        max_length=2048,
-        truncation=True,
-        padding="max_length"
-    )
-    
-    # Создаем labels - копия input_ids
-    labels = tokenized["input_ids"].copy()
-    
-    # Маскируем промпт в labels (только user + system, не assistant)
-    # Формируем промпт без ответа assistant
+    # Шаг 1: Формируем prompt_text (system + user) с generation prompt
     prompt_messages = [
-        {"role": "system", "content": example['system']},
+        {"role": "system", "content": system_prompt},
         {"role": "user", "content": example['user']}
     ]
     prompt_text = tokenizer.apply_chat_template(
@@ -220,10 +201,46 @@ def tokenize_function(example, tokenizer):
         tokenize=False,
         add_generation_prompt=True
     )
+    
+    # Шаг 2: Формируем full_text (system + user + assistant) без generation prompt
+    full_messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": example['user']},
+        {"role": "assistant", "content": assistant_text}
+    ]
+    full_text = tokenizer.apply_chat_template(
+        full_messages,
+        tokenize=False,
+        add_generation_prompt=False
+    )
+    
+    # Логирование каждого 100-го промпта (начиная с первого)
+    prompt_num = idx + 1
+    if prompt_num == 1 or prompt_num % 100 == 0:
+        print(f"\n{'='*70}")
+        print(f"ПРОМПТ #{prompt_num} (режим: {mode})")
+        print(f"{'='*70}")
+        print(f"Prompt часть:\n{prompt_text}")
+        print(f"\nFull text:\n{full_text}")
+        print(f"{'='*70}\n")
+    
+    # Шаг 3: Токенизируем весь текст БЕЗ truncation и БЕЗ padding
+    tokenized = tokenizer(
+        full_text,
+        truncation=False,
+        padding=False
+    )
+    
+    # Шаг 4: Создаем labels - копия input_ids
+    labels = tokenized["input_ids"].copy()
+    
+    # Шаг 5: Маскируем промпт в labels (system + user)
+    # Токенизируем только prompt часть для определения длины
     prompt_tokenized = tokenizer(prompt_text, add_special_tokens=False)
     prompt_len = len(prompt_tokenized["input_ids"])
     
-    # Заменяем токены промпта на -100 (игнорируются в loss)
+    # Заменяем токены prompt на -100 (игнорируются в loss)
+    # Assistant токены остаются нетронутыми
     labels[:prompt_len] = [-100] * prompt_len
     
     tokenized["labels"] = labels
@@ -235,6 +252,9 @@ def prepare_dataset(dataset, tokenizer):
     """
     Подготавливает датасет к обучению - токенизирует все примеры.
     
+    Применяет tokenize_function к каждой записи отдельно через dataset.map.
+    Каждая строка JSONL → отдельный токенизированный пример.
+    
     Args:
         dataset: Исходный датасет
         tokenizer: Токенизатор модели
@@ -244,9 +264,11 @@ def prepare_dataset(dataset, tokenizer):
     """
     print("Токенизация датасета...")
     
-    # Применяем функцию токенизации ко всем примерам
+    # Применяем функцию токенизации ко всем примерам отдельно
+    # with_indices=True передает индекс каждого примера в функцию
     tokenized_dataset = dataset.map(
-        lambda x: tokenize_function(x, tokenizer),
+        lambda x, idx: tokenize_function(x, idx, tokenizer),
+        with_indices=True,
         remove_columns=["mode", "system", "user", "assistant"]  # Удаляем исходные колонки
     )
     
@@ -269,7 +291,7 @@ def setup_training_arguments(device_type, output_dir):
     
     training_args = TrainingArguments(
         output_dir=str(output_dir),
-        per_device_train_batch_size=1 if device_type != "gpu" else 2,  # Размер батча
+        per_device_train_batch_size=1,  # Один пример за раз
         gradient_accumulation_steps=8,  # Накопление градиентов для эффективности
         learning_rate=2e-5,  # Скорость обучения
         num_train_epochs=3,  # Количество эпох
@@ -287,7 +309,7 @@ def setup_training_arguments(device_type, output_dir):
     )
     
     print(f"Параметры обучения настроены:")
-    print(f"  - Batch size: {training_args.per_device_train_batch_size}")
+    print(f"  - Batch size: 1 (один пример за раз)")
     print(f"  - Gradient accumulation: {training_args.gradient_accumulation_steps}")
     print(f"  - Learning rate: {training_args.learning_rate}")
     print(f"  - Epochs: {training_args.num_train_epochs}")

@@ -128,15 +128,15 @@ def get_json_schema_for_mode(mode: str) -> Tuple[str, str]:
     return schema_json_str, header_str
 
 
-def read_excel_sheet_as_text(excel_path: Path, sheet_name: str) -> str:
-    """Прочитать лист INPUT и сформировать текстовый блок.
+def read_excel_sheet_as_dataframe(excel_path: Path, sheet_name: str) -> pd.DataFrame:
+    """Прочитать лист Excel как DataFrame.
     
     Args:
         excel_path: Путь к Excel файлу.
         sheet_name: Имя листа для чтения.
         
     Returns:
-        Текстовое представление листа в формате "Запись N: ...".
+        DataFrame с данными листа.
     """
     try:
         # Читаем лист, сохраняя пустые значения как пустые строки
@@ -147,86 +147,68 @@ def read_excel_sheet_as_text(excel_path: Path, sheet_name: str) -> str:
             keep_default_na=False
         )
         
+        # Удаляем столбцы с названиями, содержащими "Unnamed"
+        unnamed_cols = [col for col in df.columns if 'Unnamed' in str(col)]
+        if unnamed_cols:
+            df = df.drop(columns=unnamed_cols)
+            print(f"  Удалены столбцы из {sheet_name}: {unnamed_cols}")
+        
         # Заменяем NaN на пустые строки
         df = df.fillna("")
         
-        text_blocks = []
-        record_num = 1
-        
-        for idx, row in df.iterrows():
-            # Проверяем, не является ли строка полностью пустой
-            if row.astype(str).str.strip().eq("").all():
-                continue
-            
-            # Формируем текст записи
-            lines = [f"Запись {record_num}:"]
-            
-            for col_name, value in row.items():
-                value_str = str(value).strip()
-                if value_str:
-                    lines.append(f"  {col_name}: {value_str}")
-                else:
-                    lines.append(f"  {col_name}:")
-            
-            text_blocks.append("\n".join(lines))
-            record_num += 1
-        
-        result = "\n\n".join(text_blocks)
-        print(f"Сформирован текст из {len(text_blocks)} записей листа {sheet_name}")
-        return result
+        print(f"Прочитано {len(df)} строк из листа {sheet_name}")
+        return df
         
     except Exception as e:
         print(f"Ошибка чтения листа {sheet_name} из {excel_path}: {e}")
-        return ""
+        return pd.DataFrame()
 
 
-def read_excel_sheet_as_json(excel_path: Path, sheet_name: str) -> List[Dict[str, str]]:
-    """Прочитать лист SIMPLIFIED/EXTENDED и сформировать список словарей.
+def format_row_as_text(row: pd.Series, row_num: int) -> str:
+    """Форматировать одну строку DataFrame как текстовый блок.
     
     Args:
-        excel_path: Путь к Excel файлу.
-        sheet_name: Имя листа для чтения.
+        row: Pandas Series (строка DataFrame).
+        row_num: Номер записи для отображения.
         
     Returns:
-        Список словарей с данными из листа.
+        Текстовое представление строки.
     """
-    try:
-        # Читаем лист, сохраняя пустые значения как пустые строки
-        df = pd.read_excel(
-            excel_path,
-            sheet_name=sheet_name,
-            dtype=str,
-            keep_default_na=False
-        )
+    lines = [f"Запись {row_num}:"]
+    
+    for col_name, value in row.items():
+        value_str = str(value).strip()
+        if value_str:
+            lines.append(f"  {col_name}: {value_str}")
+        else:
+            lines.append(f"  {col_name}:")
+    
+    return "\n".join(lines)
+
+
+def row_to_dict(row: pd.Series) -> Dict[str, str]:
+    """Конвертировать строку DataFrame в словарь.
+    
+    Args:
+        row: Pandas Series (строка DataFrame).
         
-        # Заменяем NaN на пустые строки
-        df = df.fillna("")
-        
-        # Удаляем полностью пустые строки
-        df = df[~df.astype(str).apply(lambda x: x.str.strip().eq("").all(), axis=1)]
-        
-        # Конвертируем в список словарей
-        rows = df.to_dict('records')
-        
-        print(f"Прочитано {len(rows)} строк из листа {sheet_name}")
-        return rows
-        
-    except Exception as e:
-        print(f"Ошибка чтения листа {sheet_name} из {excel_path}: {e}")
-        return []
+    Returns:
+        Словарь с данными строки.
+    """
+    return row.to_dict()
 
 
 def create_jsonl_record(
     mode: str,
     input_text: str,
-    target_rows: List[Dict[str, str]]
+    target_row: Dict[str, str]
 ) -> Dict:
     """Создать одну запись для JSONL файла.
     
     Args:
         mode: Режим ('simplified' или 'extended').
-        input_text: Текст из листа INPUT.
-        target_rows: Данные из листа SIMPLIFIED или EXTENDED.
+        input_text: Текст одной строки из листа INPUT.
+        target_row: Данные одной строки из листа SIMPLIFIED или EXTENDED.
         
     Returns:
         Словарь с полями mode, system, user, assistant.
@@ -242,11 +224,11 @@ def create_jsonl_record(
         tables_text=""
     ).strip()
     
-    # User prompt - это текст из INPUT
+    # User prompt - это текст одной строки из INPUT
     user_prompt = input_text
     
-    # Assistant response - объект с данными (не строка!)
-    assistant_data = {"rows": target_rows}
+    # Assistant response - объект с данными одной строки (в массиве rows)
+    assistant_data = {"rows": [target_row]}
     
     record = {
         "mode": mode,
@@ -259,45 +241,57 @@ def create_jsonl_record(
 
 
 def process_excel_file(excel_path: Path) -> List[Dict]:
-    """Обработать один Excel файл и создать две записи (simplified + extended).
+    """Обработать один Excel файл построчно и создать два примера для каждой строки.
+    
+    Для каждой строки i создаются две записи:
+    - mode="simplified" с данными из SIMPLIFIED[i]
+    - mode="extended" с данными из EXTENDED[i]
     
     Args:
         excel_path: Путь к Excel файлу.
         
     Returns:
-        Список записей для JSONL файла.
+        Список записей для JSONL файла (количество строк × 2).
     """
     print(f"Обработка файла: {excel_path.name}")
     
     records = []
     
     try:
-        # Читаем лист INPUT как текст
-        input_text = read_excel_sheet_as_text(excel_path, "INPUT")
+        # Читаем все три листа как DataFrame
+        df_input = read_excel_sheet_as_dataframe(excel_path, "INPUT")
+        df_simplified = read_excel_sheet_as_dataframe(excel_path, "SIMPLIFIED")
+        df_extended = read_excel_sheet_as_dataframe(excel_path, "EXTENDED")
         
-        if not input_text:
-            print(f"Пустой INPUT в файле {excel_path.name}, пропускаем")
-            return []
+        # Количество строк (предполагаем одинаковое на всех листах)
+        num_rows = len(df_input)
+        print(f"  Обработка {num_rows} строк...")
         
-        # Обрабатываем SIMPLIFIED
-        simplified_rows = read_excel_sheet_as_json(excel_path, "SIMPLIFIED")
-        if simplified_rows:
-            record_simplified = create_jsonl_record("simplified", input_text, simplified_rows)
+        # Обрабатываем каждую строку
+        for i in range(num_rows):
+            row_num = i + 1
+            
+            # Формируем user-промпт из строки INPUT
+            input_row = df_input.iloc[i]
+            input_text = format_row_as_text(input_row, row_num)
+            
+            # Получаем данные строки из SIMPLIFIED
+            simplified_row = df_simplified.iloc[i]
+            simplified_dict = row_to_dict(simplified_row)
+            
+            # Создаем запись для simplified
+            record_simplified = create_jsonl_record("simplified", input_text, simplified_dict)
             records.append(record_simplified)
-            print(f"  Создана запись для SIMPLIFIED ({len(simplified_rows)} строк)")
-        else:
-            print(f"  Пустой SIMPLIFIED в файле {excel_path.name}")
-        
-        # Обрабатываем EXTENDED
-        extended_rows = read_excel_sheet_as_json(excel_path, "EXTENDED")
-        if extended_rows:
-            record_extended = create_jsonl_record("extended", input_text, extended_rows)
+            
+            # Получаем данные строки из EXTENDED
+            extended_row = df_extended.iloc[i]
+            extended_dict = row_to_dict(extended_row)
+            
+            # Создаем запись для extended
+            record_extended = create_jsonl_record("extended", input_text, extended_dict)
             records.append(record_extended)
-            print(f"  Создана запись для EXTENDED ({len(extended_rows)} строк)")
-        else:
-            print(f"  Пустой EXTENDED в файле {excel_path.name}")
         
-        print(f"Создано {len(records)} записей из файла {excel_path.name}")
+        print(f"  Создано {len(records)} записей ({num_rows} строк × 2 режима)")
         return records
         
     except Exception as e:

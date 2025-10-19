@@ -306,6 +306,9 @@ def ask_qwen3_structured(
         columns = _load_csv_schema(csv_path)
         header_str = ", ".join(columns)
         
+        # Определяем режим работы
+        mode = "extended" if extended else "simplified"
+        
         # Формируем system prompt используя PROMPT_TEMPLATE_SO из конфига
         system_content = PROMPT_TEMPLATE_SO.format(
             header=header_str,
@@ -314,7 +317,11 @@ def ask_qwen3_structured(
         )
         
         # User message содержит только данные
-        system_message_content = system_content.replace("{tables_text}", "")  # Убираем placeholder из system
+        system_content_clean = system_content.replace("{tables_text}", "")  # Убираем placeholder из system
+        
+        # Добавляем режим работы в system prompt (как при обучении)
+        system_message_content = f"Режим работы: {mode}. {system_content_clean}"
+        
         messages = [
             {
                 "role": "system",
