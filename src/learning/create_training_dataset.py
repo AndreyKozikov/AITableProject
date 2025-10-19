@@ -6,7 +6,7 @@
 
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 from pydantic import BaseModel, ConfigDict, Field, create_model
@@ -220,7 +220,7 @@ def create_jsonl_record(
     mode: str,
     input_text: str,
     target_rows: List[Dict[str, str]]
-) -> Dict[str, str]:
+) -> Dict:
     """Создать одну запись для JSONL файла.
     
     Args:
@@ -234,7 +234,8 @@ def create_jsonl_record(
     # Получаем JSON схему и заголовки для режима
     schema_json_str, header_str = get_json_schema_for_mode(mode)
     
-    # Формируем system prompt
+    # Формируем system prompt как при инференсе
+    # Заменяем {tables_text} на пустую строку, оставляя "Входные данные:\n"
     system_prompt = PROMPT_TEMPLATE_SO.format(
         header=header_str,
         schema=schema_json_str,
@@ -244,28 +245,20 @@ def create_jsonl_record(
     # User prompt - это текст из INPUT
     user_prompt = input_text
     
-    # Assistant response - это JSON с данными
+    # Assistant response - объект с данными (не строка!)
     assistant_data = {"rows": target_rows}
-    assistant_json = json.dumps(assistant_data, ensure_ascii=False, separators=(',', ': '))
-    
-    # Проверяем корректность сериализации
-    try:
-        json.loads(assistant_json)
-    except json.JSONDecodeError as e:
-        print(f"Ошибка сериализации assistant JSON: {e}")
-        raise
     
     record = {
         "mode": mode,
         "system": system_prompt,
         "user": user_prompt,
-        "assistant": assistant_json
+        "assistant": assistant_data
     }
     
     return record
 
 
-def process_excel_file(excel_path: Path) -> List[Dict[str, str]]:
+def process_excel_file(excel_path: Path) -> List[Dict]:
     """Обработать один Excel файл и создать две записи (simplified + extended).
     
     Args:
@@ -348,7 +341,9 @@ def create_training_dataset() -> bool:
         
         with open(OUTPUT_JSONL_PATH, 'w', encoding='utf-8') as f:
             for record in all_records:
-                json_line = json.dumps(record, ensure_ascii=False)
+                # Сохраняем каждую запись как одну строку JSON
+                # assistant - это dict, будет сериализован как объект JSON
+                json_line = json.dumps(record, ensure_ascii=False, separators=(',', ':'))
                 f.write(json_line + '\n')
         
         print("=" * 70)

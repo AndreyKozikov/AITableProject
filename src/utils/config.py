@@ -43,15 +43,11 @@ HEADER_ANCHORS: List[Tuple[str, List[str]]] = [
 # Используется в: mapper.py, ask_qwen3_so.py
 
 # Модель Qwen для структурированного вывода
-# ID модели на HuggingFace Hub (для загрузки)
-MODEL_ID = "Qwen/Qwen3-1.7B"
-
 # Локальная директория для хранения модели
 MODEL_CACHE_DIR = ROOT.parent / "models" / "qwen"
 
-# Использовать локальную модель (если True, загружает из MODEL_CACHE_DIR)
-# Если False, загружает напрямую из HuggingFace Hub
-USE_LOCAL_MODEL = True
+# Путь к LoRA адаптерам дообученной модели
+LORA_ADAPTER_PATH = MODEL_CACHE_DIR / "lora_adapters"
 
 PROMPT_TEMPLATE = """
 Ты — ассистент по обработке табличных данных.

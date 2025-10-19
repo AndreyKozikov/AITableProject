@@ -429,9 +429,7 @@ LOG_LEVEL=INFO
 
 2. **Настройка в config.py:**
    ```python
-   MODEL_ID = "Qwen/Qwen3-1.7B"  # ID модели на HuggingFace
    MODEL_CACHE_DIR = models/qwen  # Локальная директория
-   USE_LOCAL_MODEL = True         # Использовать локальную модель
    ```
 
 3. **Fine-tuning (опционально):**

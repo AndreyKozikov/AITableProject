@@ -12,6 +12,8 @@ Based on: https://www.dataleadsfuture.com/build-autogen-agents-with-qwen3-struct
 3. Параметр enable_thinking управляет режимом Chain of Thought
 4. Валидация через model_validate_json() обеспечивает типобезопасность
 5. Схема загружается из CSV файлов, обеспечивая гибкость при изменениях
+
+Модель загружается из models/qwen/, LoRA адаптеры применяются автоматически если существуют.
 """
 
 from pathlib import Path
@@ -22,8 +24,14 @@ import pandas as pd
 import torch
 from pydantic import BaseModel, Field, create_model
 from transformers import AutoModelForCausalLM, AutoTokenizer
+from peft import PeftModel
 
-from src.utils.config import MODEL_DIR, PROMPT_TEMPLATE_SO, MODEL_ID, MODEL_CACHE_DIR, USE_LOCAL_MODEL
+from src.utils.config import (
+    MODEL_DIR, 
+    PROMPT_TEMPLATE_SO, 
+    MODEL_CACHE_DIR,
+    LORA_ADAPTER_PATH
+)
 from src.utils.logging_config import get_logger
 
 # Получение настроенного логгера
@@ -31,9 +39,6 @@ logger = get_logger(__name__)
 
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 TORCH_DTYPE = torch.bfloat16 if DEVICE == "cuda" else torch.float32
-
-# Определяем путь к модели в зависимости от настроек
-MODEL_PATH = str(MODEL_CACHE_DIR) if USE_LOCAL_MODEL else MODEL_ID
 
 # Глобальные переменные для модели
 model = None
@@ -95,10 +100,9 @@ def _load_csv_schema(csv_path: Path) -> List[str]:
     try:
         df = pd.read_csv(csv_path, sep=',', nrows=0)
         columns = list(df.columns)
-        logger.debug(f"Loaded {len(columns)} columns from {csv_path}: {columns}")
         return columns
     except Exception as e:
-        logger.error(f"Failed to load CSV schema from {csv_path}: {e}")
+        logger.error(f"Ошибка загрузки CSV схемы из {csv_path}: {e}")
         raise
 
 
@@ -140,7 +144,6 @@ def _create_table_row_model(
     # Создаем модель динамически используя create_model
     dynamic_model = create_model(model_name, **fields)
     
-    logger.debug(f"Created dynamic model '{model_name}' with fields: {list(fields.keys())}")
     return dynamic_model
 
 
@@ -164,7 +167,6 @@ def _create_structured_output_model(
         rows=(List[row_model], Field(description="List of table rows"))
     )
     
-    logger.debug(f"Created container model '{model_name}'")
     return container_model
 
 
@@ -184,7 +186,6 @@ def get_table_models(extended: bool = False) -> tuple[Type[BaseModel], Type[Base
     
     # Проверяем кэш
     if cache_key in _model_cache:
-        logger.debug(f"Using cached models for {cache_key} mode")
         return _model_cache[cache_key]
     
     # Определяем путь к CSV
@@ -197,8 +198,6 @@ def get_table_models(extended: bool = False) -> tuple[Type[BaseModel], Type[Base
         row_model_name = "TableRowSimplified"
         container_model_name = "TableStructuredOutput"
     
-    logger.info(f"Loading schema from {csv_path}")
-    
     # Загружаем колонки из CSV
     columns = _load_csv_schema(csv_path)
     
@@ -209,16 +208,14 @@ def get_table_models(extended: bool = False) -> tuple[Type[BaseModel], Type[Base
     # Кэшируем
     _model_cache[cache_key] = (row_model, container_model)
     
-    logger.info(f"Created and cached models for {cache_key} mode with {len(columns)} columns")
     return row_model, container_model
 
 
 def load_model() -> None:
-    """Load Qwen model and tokenizer.
+    """Load Qwen model and tokenizer from local models directory.
     
-    Initializes the global model and tokenizer variables if they haven't been
-    loaded yet. Uses appropriate device (CUDA/CPU) and data type.
-    Loads from local cache if USE_LOCAL_MODEL is True, otherwise from HuggingFace Hub.
+    Loads model from MODEL_CACHE_DIR and automatically applies LoRA adapters
+    if they exist in LORA_ADAPTER_PATH.
     
     Raises:
         Exception: If model loading fails.
@@ -227,29 +224,34 @@ def load_model() -> None:
     
     try:
         if model is None or tokenizer is None:
-            source = "local cache" if USE_LOCAL_MODEL else "HuggingFace Hub"
-            logger.info(f"Loading Qwen model for structured output from {source}")
-            logger.info(f"Model path: {MODEL_PATH}")
-            logger.info(f"Using device: {DEVICE}, dtype: {TORCH_DTYPE}")
-            
+            # Загружаем токенизатор
             tokenizer = AutoTokenizer.from_pretrained(
-                MODEL_PATH,
+                str(MODEL_CACHE_DIR),
                 trust_remote_code=True
             )
-            model = AutoModelForCausalLM.from_pretrained(
-                MODEL_PATH,
+            
+            # Загружаем базовую модель
+            base_model = AutoModelForCausalLM.from_pretrained(
+                str(MODEL_CACHE_DIR),
                 torch_dtype=TORCH_DTYPE,
                 device_map="auto" if torch.cuda.is_available() else None,
                 trust_remote_code=True
             )
             
-            logger.info(f"Qwen model and tokenizer loaded successfully from {source}")
+            # Проверяем наличие LoRA адаптеров и загружаем их автоматически
+            if LORA_ADAPTER_PATH.exists():
+                model = PeftModel.from_pretrained(
+                    base_model,
+                    str(LORA_ADAPTER_PATH),
+                    is_trainable=False
+                )
+                logger.info("✓ Модель загружена с LoRA адаптерами")
+            else:
+                model = base_model
+                logger.info("✓ Модель загружена без LoRA адаптеров (базовая модель)")
             
     except Exception as e:
-        logger.error(f"Failed to load Qwen model: {e}")
-        if USE_LOCAL_MODEL:
-            logger.error(f"Model not found in local cache: {MODEL_CACHE_DIR}")
-            logger.error(f"Run 'python src/utils/download_model.py' to download the model")
+        logger.error(f"Ошибка загрузки модели Qwen: {e}")
         raise
 
 
@@ -281,14 +283,9 @@ def ask_qwen3_structured(
         Exception: If model inference or validation fails.
     """
     if not prompt:
-        logger.warning("Empty prompt provided to Qwen3 structured output")
         # Возвращаем пустую структуру
         _, container_model = get_table_models(extended=extended)
         return container_model(rows=[])
-    
-    logger.info(f"Starting Qwen3 structured inference with prompt length: {len(prompt)}")
-    logger.info(f"Mode: {'extended' if extended else 'simplified'}, Thinking: {enable_thinking}")
-    logger.debug(f"Prompt preview: {prompt[:200]}...")
     
     try:
         load_model()
@@ -329,37 +326,28 @@ def ask_qwen3_structured(
             }
         ]
         
-        logger.info("Preparing model input with JSON schema from CSV...")
-        logger.info(f"Schema columns: {header_str}")
-        logger.info(f"Total messages count: {len(messages)}")
-        
-        
-        # Применяем chat template с параметром enable_thinking (из статьи)
+        # Применяем chat template с параметром enable_thinking
         text = tokenizer.apply_chat_template(
             messages,
             tokenize=False,
             add_generation_prompt=True,
-            enable_thinking=enable_thinking  # Switches between thinking and non-thinking modes
+            enable_thinking=enable_thinking
         )
         
-        # Логируем финальный текст после применения chat template
+        # Логируем финальный промпт
         logger.info(f"\n{'='*60}")
-        logger.info("Final text after applying chat template:")
+        logger.info("ФИНАЛЬНЫЙ ПРОМПТ:")
         logger.info(f"{'='*60}")
-        logger.info(f"Text length: {len(text)} characters")
-        logger.info(f"Full text:\n{text}")
+        logger.info(f"{text}")
         logger.info(f"{'='*60}\n")
         
         model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
         eos_token_id = tokenizer.eos_token_id
         
-        logger.info(f"Running model inference with max_new_tokens: {max_new_tokens}")
-        logger.info(f"Input token count: {model_inputs.input_ids.shape[1]}")
-        
         generated_ids = model.generate(
             **model_inputs,
             max_new_tokens=max_new_tokens,
-            do_sample=False,  # отключаем случайность для стабильности (из статьи)
+            do_sample=False,
             eos_token_id=eos_token_id,
             pad_token_id=tokenizer.eos_token_id,
             temperature=0.1,
@@ -369,14 +357,11 @@ def ask_qwen3_structured(
         output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist()
         output_text = tokenizer.decode(output_ids, skip_special_tokens=True)
         
-        logger.info(f"Model inference completed. Generated {len(output_text)} characters")
-        
-        # Логируем полный ответ модели
+        # Логируем ответ модели
         logger.info(f"\n{'='*60}")
-        logger.info("RAW Model Response:")
+        logger.info("ОТВЕТ МОДЕЛИ:")
         logger.info(f"{'='*60}")
-        logger.info(f"Response length: {len(output_text)} characters")
-        logger.info(f"Full response:\n{output_text}")
+        logger.info(f"{output_text}")
         logger.info(f"{'='*60}\n")
         
         # Очистка вывода от возможного Markdown синтаксиса
@@ -399,27 +384,24 @@ def ask_qwen3_structured(
             output_text_clean = "\n".join(json_lines)
         
         
-        # Валидация через model_validate_json (метод из статьи)
-        logger.info("Validating output with Pydantic model_validate_json...")
+        # Валидация через model_validate_json
         structured_result = container_model.model_validate_json(output_text_clean)
         
-        logger.info(f"Successfully validated structured output with {len(structured_result.rows)} rows")
-        
-        # Логируем валидированный результат
+        # Логируем финальный обработанный результат
         logger.info(f"\n{'='*60}")
-        logger.info("Validated Pydantic Result:")
+        logger.info("ФИНАЛЬНЫЙ РЕЗУЛЬТАТ:")
         logger.info(f"{'='*60}")
-        logger.info(f"Number of rows: {len(structured_result.rows)}")
-        logger.info(f"Result object: {structured_result}")
-        if structured_result.rows:
-            logger.info(f"First row sample: {structured_result.rows[0]}")
+        logger.info(f"Количество строк: {len(structured_result.rows)}")
+        for i, row in enumerate(structured_result.rows, 1):
+            logger.info(f"Строка {i}: {row.model_dump(by_alias=True)}")
         logger.info(f"{'='*60}\n")
         
         return structured_result
         
     except Exception as e:
-        logger.error(f"Error in Qwen3 structured inference: {e}")
-        logger.error(f"Failed output text: {output_text if 'output_text' in locals() else 'N/A'}")
+        logger.error(f"Ошибка обработки: {e}")
+        if 'output_text' in locals():
+            logger.error(f"Проблемный вывод: {output_text}")
         raise
 
 
@@ -447,5 +429,4 @@ def extract_rows_as_dicts(
         row_dict = row.model_dump(by_alias=use_aliases)
         rows_as_dicts.append(row_dict)
     
-    logger.debug(f"Extracted {len(rows_as_dicts)} rows as dictionaries")
     return rows_as_dicts

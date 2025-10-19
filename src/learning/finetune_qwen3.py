@@ -21,10 +21,7 @@ from transformers import (
 )
 from peft import LoraConfig, get_peft_model
 
-from src.utils.config import MODEL_ID, MODEL_CACHE_DIR, USE_LOCAL_MODEL
-
-# Определяем путь к модели в зависимости от настроек
-MODEL_PATH = str(MODEL_CACHE_DIR) if USE_LOCAL_MODEL else MODEL_ID
+from src.utils.config import MODEL_CACHE_DIR
 
 
 def get_device():
@@ -76,29 +73,30 @@ def get_torch_dtype(device_type):
         return torch.float32  # На CPU используем float32
 
 
-def load_model_and_tokenizer(model_path, device, torch_dtype):
+def load_model_and_tokenizer(device, torch_dtype):
     """
-    Загружает модель и токенизатор.
+    Загружает модель и токенизатор из локальной директории.
     
     Args:
-        model_path: Путь к модели (локальный или HuggingFace ID)
         device: Устройство для загрузки модели
         torch_dtype: Тип данных для модели
         
     Returns:
         Кортеж (tokenizer, model)
     """
-    source = "local cache" if USE_LOCAL_MODEL else "HuggingFace Hub"
-    print(f"Загрузка модели из {source}: {model_path}")
+    print(f"Загрузка модели из {MODEL_CACHE_DIR}")
     print(f"Устройство: {device}, dtype: {torch_dtype}")
     
     try:
         # Загружаем токенизатор
-        tokenizer = AutoTokenizer.from_pretrained(model_path, trust_remote_code=True)
+        tokenizer = AutoTokenizer.from_pretrained(
+            str(MODEL_CACHE_DIR),
+            trust_remote_code=True
+        )
         
         # Загружаем модель для causal language modeling
         model = AutoModelForCausalLM.from_pretrained(
-            model_path,
+            str(MODEL_CACHE_DIR),
             torch_dtype=torch_dtype,
             device_map="auto" if torch.cuda.is_available() else None,
             trust_remote_code=True
@@ -106,14 +104,12 @@ def load_model_and_tokenizer(model_path, device, torch_dtype):
         
         model = model.to(device)
         
-        print(f"Модель и токенизатор загружены успешно из {source}")
+        print("Модель и токенизатор загружены успешно")
         return tokenizer, model
         
     except Exception as e:
         print(f"Ошибка при загрузке модели: {e}")
-        if USE_LOCAL_MODEL:
-            print(f"Модель не найдена в локальном кэше: {MODEL_CACHE_DIR}")
-            print(f"Запустите 'python src/utils/download_model.py' для загрузки модели")
+        print(f"Путь к модели: {MODEL_CACHE_DIR}")
         raise
 
 
@@ -172,7 +168,7 @@ def tokenize_function(example, tokenizer):
     """
     Токенизирует один пример из датасета.
     
-    Формирует промпт из system и user сообщений, добавляет ответ assistant.
+    Использует apply_chat_template для форматирования сообщений.
     Маскирует промпт в labels (значения -100), чтобы модель обучалась
     только на генерации ответа.
     
@@ -183,17 +179,29 @@ def tokenize_function(example, tokenizer):
     Returns:
         Словарь с токенизированными данными
     """
-    # Формируем полный промпт
-    prompt = f"System: {example['system']}\n\nUser: {example['user']}\n\nAssistant: "
-    output = example['assistant']
+    # Преобразуем assistant из dict в JSON строку, если это dict
+    assistant_text = example['assistant']
+    if isinstance(assistant_text, dict):
+        assistant_text = json.dumps(assistant_text, ensure_ascii=False, separators=(',', ':'))
     
-    # Полный текст = промпт + ответ
-    full_text = prompt + output
+    # Формируем messages для chat template
+    messages = [
+        {"role": "system", "content": example['system']},
+        {"role": "user", "content": example['user']},
+        {"role": "assistant", "content": assistant_text}
+    ]
+    
+    # Применяем chat template без generation prompt (для обучения)
+    full_text = tokenizer.apply_chat_template(
+        messages,
+        tokenize=False,
+        add_generation_prompt=False
+    )
     
     # Токенизируем весь текст
     tokenized = tokenizer(
         full_text,
-        max_length=2048,  # Максимальная длина для Qwen3
+        max_length=2048,
         truncation=True,
         padding="max_length"
     )
@@ -201,8 +209,18 @@ def tokenize_function(example, tokenizer):
     # Создаем labels - копия input_ids
     labels = tokenized["input_ids"].copy()
     
-    # Маскируем промпт в labels (не учитываем в loss)
-    prompt_tokenized = tokenizer(prompt, add_special_tokens=False)
+    # Маскируем промпт в labels (только user + system, не assistant)
+    # Формируем промпт без ответа assistant
+    prompt_messages = [
+        {"role": "system", "content": example['system']},
+        {"role": "user", "content": example['user']}
+    ]
+    prompt_text = tokenizer.apply_chat_template(
+        prompt_messages,
+        tokenize=False,
+        add_generation_prompt=True
+    )
+    prompt_tokenized = tokenizer(prompt_text, add_special_tokens=False)
     prompt_len = len(prompt_tokenized["input_ids"])
     
     # Заменяем токены промпта на -100 (игнорируются в loss)
@@ -358,9 +376,7 @@ def main():
     output_dir = model_base_dir / "checkpoints"
     adapters_dir = model_base_dir / "lora_adapters"
     
-    source = "локальный кэш" if USE_LOCAL_MODEL else "HuggingFace Hub"
-    print(f"Источник модели: {source}")
-    print(f"Путь к модели: {MODEL_PATH}")
+    print(f"Путь к модели: {MODEL_CACHE_DIR}")
     print(f"Данные: {data_path}")
     print(f"Чекпоинты: {output_dir}")
     print(f"Адаптеры: {adapters_dir}")
@@ -381,7 +397,7 @@ def main():
     print("\n" + "=" * 70)
     print("ШАГ 2: Загрузка модели и токенизатора")
     print("=" * 70)
-    tokenizer, model = load_model_and_tokenizer(MODEL_PATH, device, torch_dtype)
+    tokenizer, model = load_model_and_tokenizer(device, torch_dtype)
     
     # Шаг 3: Настраиваем LoRA
     print("\n" + "=" * 70)
