@@ -191,3 +191,5 @@ PPSTRUCTURE_USE_TABLE_RECOGNITION = True  # Включить модуль рас
 # ==================== ИНИЦИАЛИЗАЦИЯ ДИРЕКТОРИЙ ====================
 for d in (INBOX_DIR, PARSING_DIR, OUT_DIR, OUT_DIR_LEARNING_DATA, MODEL_CACHE_DIR):
     d.mkdir(exist_ok=True, parents=True)
+
+MODEL_ID = "Qwen/Qwen3-1.7B"

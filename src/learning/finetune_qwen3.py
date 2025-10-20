@@ -9,6 +9,7 @@
 import os
 import json
 from pathlib import Path
+from datetime import datetime
 
 import torch
 from datasets import load_dataset
@@ -297,8 +298,9 @@ def setup_training_arguments(device_type, output_dir):
         num_train_epochs=3,  # Количество эпох
         logging_dir=str(output_dir / "logs"),
         logging_steps=10,  # Логирование каждые 10 шагов
-        save_strategy="epoch",  # Сохранять после каждой эпохи
-        save_total_limit=2,  # Хранить только 2 последних чекпоинта
+        save_strategy="steps",  # Сохранять после каждых N шагов
+        save_steps=5,  # Сохранять каждые 100 шагов
+        save_total_limit=2,  # Хранить 5 последних чекпоинтов
         report_to="none",  # Не отправлять в wandb/tensorboard
         remove_unused_columns=False,
         fp16=True if device_type == "gpu" else False,  # Mixed precision для GPU
@@ -306,6 +308,7 @@ def setup_training_arguments(device_type, output_dir):
         warmup_steps=100,  # Постепенное увеличение learning rate
         weight_decay=0.01,  # L2 регуляризация
         dataloader_num_workers=0,  # Количество воркеров для загрузки данных
+        resume_from_checkpoint=True,  # Автоматически возобновлять с последнего чекпоинта
     )
     
     print(f"Параметры обучения настроены:")
@@ -313,6 +316,9 @@ def setup_training_arguments(device_type, output_dir):
     print(f"  - Gradient accumulation: {training_args.gradient_accumulation_steps}")
     print(f"  - Learning rate: {training_args.learning_rate}")
     print(f"  - Epochs: {training_args.num_train_epochs}")
+    print(f"  - Чекпоинты: каждые {training_args.save_steps} шагов")
+    print(f"  - Хранится чекпоинтов: {training_args.save_total_limit}")
+    print(f"  - Автовозобновление: включено")
     
     return training_args
 
@@ -385,8 +391,13 @@ def main():
     """
     Главная функция скрипта.
     """
+    # Запоминаем время начала
+    start_time = datetime.now()
+    
     print("=" * 70)
     print("FINE-TUNING МОДЕЛИ QWEN С LORA")
+    print("=" * 70)
+    print(f"Время начала: {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
     print("=" * 70)
     
     # Определяем пути
@@ -402,6 +413,53 @@ def main():
     print(f"Данные: {data_path}")
     print(f"Чекпоинты: {output_dir}")
     print(f"Адаптеры: {adapters_dir}")
+    
+    print("\n" + "=" * 70)
+    print("ИНФОРМАЦИЯ О ЧЕКПОИНТАХ И ВОЗОБНОВЛЕНИИ ОБУЧЕНИЯ")
+    print("=" * 70)
+    print("• Чекпоинты сохраняются каждые 100 шагов в директорию checkpoints/")
+    print("• Хранятся последние 5 чекпоинтов для экономии места")
+    print("• При прерывании обучения (Ctrl+C или выключение компьютера):")
+    print("  - Запустите скрипт снова: python src/learning/finetune_qwen3.py")
+    print("  - Обучение автоматически продолжится с последнего чекпоинта")
+    print("• Чекпоинты содержат: веса модели, optimizer state, scheduler state")
+    print("=" * 70 + "\n")
+    
+    # Проверяем наличие существующих чекпоинтов
+    print("=" * 70)
+    print("СТАТУС ОБУЧЕНИЯ")
+    print("=" * 70)
+    
+    if output_dir.exists():
+        # Ищем все чекпоинты
+        checkpoints = sorted([d for d in output_dir.glob("checkpoint-*") if d.is_dir()])
+        
+        if checkpoints:
+            # Находим последний чекпоинт
+            last_checkpoint = checkpoints[-1]
+            checkpoint_step = last_checkpoint.name.split("-")[-1]
+            
+            print(f"✓ Найдены существующие чекпоинты: {len(checkpoints)} шт.")
+            print(f"✓ Последний чекпоинт: {last_checkpoint.name}")
+            print(f"✓ ОБУЧЕНИЕ БУДЕТ ВОЗОБНОВЛЕНО С ШАГА {checkpoint_step}")
+            print(f"\nЧекпоинты:")
+            for cp in checkpoints[-5:]:  # Показываем последние 5
+                print(f"  • {cp.name}")
+            
+            # Проверяем маркер завершения
+            completion_marker = output_dir / "TRAINING_COMPLETED.txt"
+            if completion_marker.exists():
+                print(f"\n⚠️  ВНИМАНИЕ: Найден файл TRAINING_COMPLETED.txt")
+                print(f"   Обучение уже было завершено ранее.")
+                print(f"   Для нового обучения удалите папку: {output_dir}")
+        else:
+            print("• Чекпоинты не найдены")
+            print("✓ ОБУЧЕНИЕ НАЧНЁТСЯ С НУЛЯ (эпоха 1, шаг 0)")
+    else:
+        print("• Директория чекпоинтов не существует")
+        print("✓ ОБУЧЕНИЕ НАЧНЁТСЯ С НУЛЯ (эпоха 1, шаг 0)")
+    
+    print("=" * 70 + "\n")
     
     # Проверяем существование файла данных
     if not data_path.exists():
@@ -457,12 +515,49 @@ def main():
     print("=" * 70)
     save_lora_adapters(model, tokenizer, adapters_dir)
     
+    # Вычисляем время обучения
+    end_time = datetime.now()
+    training_duration = end_time - start_time
+    hours, remainder = divmod(training_duration.total_seconds(), 3600)
+    minutes, seconds = divmod(remainder, 60)
+    
+    # Создаём файл-маркер о завершении обучения
+    completion_marker = output_dir / "TRAINING_COMPLETED.txt"
+    with open(completion_marker, 'w', encoding='utf-8') as f:
+        f.write(f"Обучение завершено: {end_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Начало обучения: {start_time.strftime('%Y-%m-%d %H:%M:%S')}\n")
+        f.write(f"Длительность: {int(hours)}ч {int(minutes)}м {int(seconds)}с\n")
+        f.write(f"\nLoRA адаптеры: {adapters_dir}\n")
+        f.write(f"Чекпоинты: {output_dir}\n")
+    
+    # Выводим заметное сообщение о завершении
+    print("\n" + "🎉" * 35)
+    print("\n" + " " * 15 + "ОБУЧЕНИЕ ЗАВЕРШЕНО!")
+    print(" " * 10 + "TRAINING COMPLETED SUCCESSFULLY!")
+    print("\n" + "🎉" * 35)
     print("\n" + "=" * 70)
-    print("ПРОЦЕСС FINE-TUNING ЗАВЕРШЕН УСПЕШНО!")
+    print("ИНФОРМАЦИЯ О ЗАВЕРШЕНИИ")
     print("=" * 70)
-    print(f"\nLoRA адаптеры сохранены в: {adapters_dir}")
-    print("Для использования обученной модели загрузите базовую модель")
-    print("и примените сохраненные адаптеры с помощью PeftModel.from_pretrained()")
+    print(f"Время начала:     {start_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Время окончания:  {end_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"Длительность:     {int(hours)}ч {int(minutes)}м {int(seconds)}с")
+    print("=" * 70)
+    print("\n📁 СОХРАНЁННЫЕ ФАЙЛЫ:")
+    print(f"   • LoRA адаптеры: {adapters_dir}")
+    print(f"   • Чекпоинты: {output_dir}")
+    print(f"   • Маркер завершения: {completion_marker}")
+    print("\n📖 ИСПОЛЬЗОВАНИЕ:")
+    print("   Для использования обученной модели загрузите базовую модель")
+    print("   и примените адаптеры через PeftModel.from_pretrained()")
+    print("\n" + "=" * 70)
+    
+    # Звуковой сигнал (для Windows)
+    try:
+        import winsound
+        for _ in range(3):
+            winsound.Beep(1000, 500)  # Частота 1000Hz, длительность 500мс
+    except:
+        pass  # На других ОС звуковой сигнал не сработает
 
 
 if __name__ == "__main__":
