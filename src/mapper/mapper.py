@@ -76,7 +76,7 @@ def mapper_structured(
     """
     max_new_tokens = 4000
     all_rows = []
-    chunk_size = 5
+    chunk_size = 1
     
     if extended:
         logger.info("Starting mapper_structured in extended mode")

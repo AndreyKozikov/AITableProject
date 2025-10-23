@@ -308,7 +308,6 @@ def setup_training_arguments(device_type, output_dir):
         warmup_steps=100,  # Постепенное увеличение learning rate
         weight_decay=0.01,  # L2 регуляризация
         dataloader_num_workers=0,  # Количество воркеров для загрузки данных
-        resume_from_checkpoint=True,  # Автоматически возобновлять с последнего чекпоинта
     )
     
     print(f"Параметры обучения настроены:")
@@ -318,12 +317,11 @@ def setup_training_arguments(device_type, output_dir):
     print(f"  - Epochs: {training_args.num_train_epochs}")
     print(f"  - Чекпоинты: каждые {training_args.save_steps} шагов")
     print(f"  - Хранится чекпоинтов: {training_args.save_total_limit}")
-    print(f"  - Автовозобновление: включено")
     
     return training_args
 
 
-def train_model(model, tokenizer, tokenized_dataset, training_args):
+def train_model(model, tokenizer, tokenized_dataset, training_args, resume_from_checkpoint=None):
     """
     Запускает процесс обучения модели.
     
@@ -332,6 +330,7 @@ def train_model(model, tokenizer, tokenized_dataset, training_args):
         tokenizer: Токенизатор
         tokenized_dataset: Токенизированный датасет
         training_args: Параметры обучения
+        resume_from_checkpoint: Путь к чекпоинту для возобновления обучения (None для начала с нуля)
         
     Returns:
         Обученная модель
@@ -356,8 +355,8 @@ def train_model(model, tokenizer, tokenized_dataset, training_args):
     print("НАЧАЛО ОБУЧЕНИЯ")
     print("=" * 70)
     
-    # Запускаем обучение
-    trainer.train()
+    # Запускаем обучение с возможностью возобновления из чекпоинта
+    trainer.train(resume_from_checkpoint=resume_from_checkpoint)
     
     print("=" * 70)
     print("ОБУЧЕНИЕ ЗАВЕРШЕНО")
@@ -430,6 +429,8 @@ def main():
     print("СТАТУС ОБУЧЕНИЯ")
     print("=" * 70)
     
+    resume_checkpoint = None  # Путь к чекпоинту для возобновления
+    
     if output_dir.exists():
         # Ищем все чекпоинты
         checkpoints = sorted([d for d in output_dir.glob("checkpoint-*") if d.is_dir()])
@@ -438,6 +439,7 @@ def main():
             # Находим последний чекпоинт
             last_checkpoint = checkpoints[-1]
             checkpoint_step = last_checkpoint.name.split("-")[-1]
+            resume_checkpoint = str(last_checkpoint)  # Сохраняем путь для возобновления
             
             print(f"✓ Найдены существующие чекпоинты: {len(checkpoints)} шт.")
             print(f"✓ Последний чекпоинт: {last_checkpoint.name}")
@@ -507,7 +509,7 @@ def main():
     print("\n" + "=" * 70)
     print("ШАГ 7: Обучение модели")
     print("=" * 70)
-    model = train_model(model, tokenizer, tokenized_dataset, training_args)
+    model = train_model(model, tokenizer, tokenized_dataset, training_args, resume_checkpoint)
     
     # Шаг 8: Сохраняем адаптеры
     print("\n" + "=" * 70)
