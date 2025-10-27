@@ -36,6 +36,15 @@
             "interval": 1,
             "backupCount": 7,
             "encoding": "utf-8"
+        },
+        "cot_file": {
+            "class": "logging.handlers.RotatingFileHandler",
+            "level": "DEBUG",
+            "formatter": "detailed",
+            "filename": "logs/cot_debug.log",
+            "maxBytes": 52428800,
+            "backupCount": 3,
+            "encoding": "utf-8"
         }
     },
     "loggers": {
@@ -127,6 +136,11 @@
         "src.mapper.ask_llama2": {
             "level": "INFO",
             "handlers": ["console", "file_rotating", "file_daily"],
+            "propagate": false
+        },
+        "src.mapper.ask_qwen3_cot": {
+            "level": "DEBUG",
+            "handlers": ["console", "file_rotating", "file_daily", "cot_file"],
             "propagate": false
         },
         "src.app.enhanced_app": {

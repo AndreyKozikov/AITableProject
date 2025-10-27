@@ -120,19 +120,21 @@ def save_to_xlsx(rows: List[dict]) -> Path:
 
 def process_files(files: List[Path], 
                  extended: bool = False, 
-                 remote_model: bool = False) -> Optional[Path]:
+                 remote_model: bool = False,
+                 use_cot: bool = False) -> Optional[Path]:
     """Главная функция обработки файлов.
     
     Args:
         files: Список файлов для обработки.
         extended: Флаг расширенной обработки.
         remote_model: Флаг использования удаленной AI модели.
+        use_cot: Флаг использования модели с Chain-of-Thought reasoning.
         
     Returns:
         Путь к созданному файлу результата или None.
     """
     logger.info(f"Начинаем обработку {len(files)} файлов")
-    logger.info(f"Расширенный режим: {extended}, Удаленная модель: {remote_model}")
+    logger.info(f"Расширенный режим: {extended}, Удаленная модель: {remote_model}, CoT: {use_cot}")
     
     try:
         if remote_model:
@@ -152,8 +154,9 @@ def process_files(files: List[Path],
                 
             rows = mapper_structured(
                         files=files_list_csv,
-                        extended=extended,  # или True для расширенного режима
-                        enable_thinking=False  # или True для режима рассуждений
+                        extended=extended,
+                        enable_thinking=False,
+                        use_cot=use_cot
                     )
 
 

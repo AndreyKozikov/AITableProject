@@ -17,6 +17,7 @@ from src.mapper.ask_qwen2 import ask_qwen2
 from src.mapper.ask_qwen3 import ask_qwen3
 from src.mapper.ask_llama2 import ask_llama2
 from src.mapper.ask_qwen3_so import ask_qwen3_structured, extract_rows_as_dicts
+from src.mapper.ask_qwen3_cot import ask_qwen3_cot, extract_cot_rows_as_dicts
 from src.utils.config import MODEL_DIR, PARSING_DIR, PROMPT_TEMPLATE, PROMPT_TEMPLATE_SO
 
 # Настройка логирования
@@ -59,7 +60,8 @@ def chunk_data(data: List[Any], chunk_size: int = 20) -> Generator[List[Any], No
 def mapper_structured(
     files: List[Union[str, Path]], 
     extended: bool = False,
-    enable_thinking: bool = False
+    enable_thinking: bool = False,
+    use_cot: bool = False
 ) -> List[Dict[str, str]]:
     """Main data mapping function with structured output.
     
@@ -70,6 +72,7 @@ def mapper_structured(
         files: List of JSON files to process.
         extended: Extended processing mode flag.
         enable_thinking: Enable Chain of Thought reasoning.
+        use_cot: Использовать модель с Chain-of-Thought reasoning.
         
     Returns:
         Tuple of (all_rows, headers) where all_rows is list of dicts.
@@ -125,22 +128,47 @@ def mapper_structured(
                 
                 # Log chunk info
                 logger.info(f"Processing chunk {chunk_count} with {len(chunk)} records")
-                logger.info(f"Chunk data preview:\n{tables_text}")
                 logger.info(f"Chunk keys: {list(chunk[0].keys()) if chunk else 'empty'}")
                 
                 # Log prompt info
                 logger.info(f"Prompt length: {len(tables_text)} characters")
-                logger.info(f"Prompt preview (first 300 chars):\n{tables_text}")
                 
                 # Send to Qwen3 structured output model
-                logger.info(f"Sending chunk {chunk_count} to Qwen3 structured model...")
-                
-                structured_result = ask_qwen3_structured(
-                    prompt=tables_text,
-                    extended=extended,
-                    max_new_tokens=max_new_tokens,
-                    enable_thinking=enable_thinking
-                )
+                if use_cot:
+                    logger.info(f"Sending chunk {chunk_count} to Qwen3 CoT model...")
+                    mode = "extended" if extended else "simplified"
+                    cot_result = ask_qwen3_cot(tables_text, mode=mode)
+                    
+                    logger.info(f"CoT model returned success={cot_result.get('success')}")
+                    logger.info(f"CoT raw response:\n{cot_result.get('raw_response', '')}")
+                    
+                    # Для тестирования принимаем любой результат
+                    structured_result = cot_result.get("result", {})
+                    
+                    # Создаем объект совместимый с extract_rows_as_dicts
+                    if structured_result and "rows" in structured_result:
+                        class SimpleResult:
+                            def __init__(self, rows_data):
+                                self.rows = rows_data
+                        
+                        structured_result = SimpleResult(structured_result["rows"])
+                    
+                    if cot_result.get("reasoning"):
+                        logger.info(f"CoT reasoning:\n{cot_result['reasoning']}")
+                    
+                    # Не используем fallback для тестирования
+                    if not cot_result.get("success"):
+                        logger.warning(f"CoT model error: {cot_result.get('error')}")
+                        # Возвращаем пустой результат для анализа
+                        structured_result = {}
+                else:
+                    logger.info(f"Sending chunk {chunk_count} to Qwen3 structured model...")
+                    structured_result = ask_qwen3_structured(
+                        prompt=tables_text,
+                        extended=extended,
+                        max_new_tokens=max_new_tokens,
+                        enable_thinking=enable_thinking
+                    )
                 
                 # Log structured result info
                 if structured_result:
@@ -151,7 +179,10 @@ def mapper_structured(
                     logger.warning(f"Empty structured response from model for chunk {chunk_count}")
                 
                 # Extract rows as dictionaries with Russian field names
-                chunk_rows = extract_rows_as_dicts(structured_result, use_aliases=True)
+                if use_cot:
+                    chunk_rows = extract_cot_rows_as_dicts(cot_result, use_aliases=True)
+                else:
+                    chunk_rows = extract_rows_as_dicts(structured_result, use_aliases=True)
                 
                 logger.info(f"Received {len(chunk_rows)} structured rows from chunk {chunk_count}")
                 if chunk_rows:
