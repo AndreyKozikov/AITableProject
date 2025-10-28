@@ -105,8 +105,14 @@ class Qwen3CoTModel:
         Returns:
             Отформатированный промпт
         """
-        # Создаем system prompt
+        # Получаем информацию из графа знаний для контекстной подачи
+        knowledge_context = self._get_knowledge_context(input_text, mode)
+        
+        # Создаем system prompt с полной информацией из графа знаний
         system_prompt = f"""Режим работы: {mode}. Ты — ассистент по структурированной обработке промышленных инструментов.
+
+БАЗА ЗНАНИЙ:
+{knowledge_context}
 
 КРИТИЧЕСКИ ВАЖНО:
 - Отвечай ТОЛЬКО JSON структурой
@@ -116,9 +122,10 @@ class Qwen3CoTModel:
 - НЕ ДОБАВЛЯЙ комментарии или пояснения
 
 Правила анализа:
-1. Выдели обозначение, наименование, производителя и параметры
-2. Определи производителя по обозначению (SDJCR/CNMG→Sandvik, YG/DH→YG-1, KGM→KELITE, DCMT→ZCC, ER→EROGLU, HSK/BT→DAndrea, A0/A1→JieHe)
-3. Представь результат в JSON формате
+1. Используй информацию из базы знаний для точного определения производителей и типов инструментов
+2. Выдели обозначение, наименование, производителя и параметры
+3. Применяй правила определения производителя по обозначению из базы знаний
+4. Представь результат в JSON формате
 
 Правила вывода:
 - Используй ровно эти ключи: {', '.join(self._get_columns(mode))}
@@ -138,6 +145,123 @@ class Qwen3CoTModel:
         user_prompt = f"Проанализируй данные:\n{input_text}"
 
         return system_prompt, user_prompt
+    
+    def _get_knowledge_context(self, input_text: str, mode: str) -> str:
+        """
+        Получить контекстную информацию из графа знаний для подачи в модель.
+        
+        Args:
+            input_text: Входной текст для анализа
+            mode: Режим обработки
+            
+        Returns:
+            Форматированная строка с информацией из графа знаний
+        """
+        try:
+            # Получаем базовую информацию из графа знаний
+            manufacturers = self.knowledge_graph.get_catalog_manufacturers()
+            tool_types = list(self.knowledge_graph.get_tool_type_patterns().keys())
+            
+            # Находим релевантные сущности в тексте
+            relevant_entities = self._find_relevant_entities(input_text)
+            
+            # Получаем правила определения производителей
+            manufacturer_rules = self._get_manufacturer_rules()
+            
+            # Формируем контекст
+            context_parts = []
+            
+            # Базовая информация о производителях
+            if manufacturers:
+                context_parts.append(f"ПРОИЗВОДИТЕЛИ: {', '.join(sorted(manufacturers))}")
+            
+            # Типы инструментов
+            if tool_types:
+                context_parts.append(f"ТИПЫ ИНСТРУМЕНТОВ: {', '.join(sorted(tool_types))}")
+            
+            # Правила определения производителей
+            if manufacturer_rules:
+                context_parts.append(f"ПРАВИЛА ОПРЕДЕЛЕНИЯ ПРОИЗВОДИТЕЛЕЙ:\n{manufacturer_rules}")
+            
+            # Релевантные сущности
+            if relevant_entities:
+                context_parts.append(f"РЕЛЕВАНТНЫЕ СУЩНОСТИ В ТЕКСТЕ: {', '.join(relevant_entities)}")
+            
+            return "\n".join(context_parts) if context_parts else "База знаний недоступна"
+            
+        except Exception as e:
+            logger.warning(f"Ошибка получения контекста из графа знаний: {e}")
+            return "База знаний недоступна"
+    
+    def _find_relevant_entities(self, input_text: str) -> List[str]:
+        """
+        Найти релевантные сущности в тексте.
+        
+        Args:
+            input_text: Входной текст
+            
+        Returns:
+            Список найденных сущностей
+        """
+        try:
+            relevant_entities = []
+            text_lower = input_text.lower()
+            
+            # Ищем производителей по обозначениям из параметров
+            parameter_patterns = self.knowledge_graph.get_parameter_patterns()
+            for pattern, description in parameter_patterns.items():
+                if pattern.lower() in text_lower:
+                    relevant_entities.append(f"{pattern}→{description}")
+            
+            # Ищем типы инструментов
+            tool_patterns = self.knowledge_graph.get_tool_type_patterns()
+            for tool_type, patterns in tool_patterns.items():
+                for pattern in patterns:
+                    if pattern.lower() in text_lower:
+                        relevant_entities.append(f"{pattern}→{tool_type}")
+                        break
+            
+            return relevant_entities[:10]  # Ограничиваем количество
+            
+        except Exception as e:
+            logger.warning(f"Ошибка поиска релевантных сущностей: {e}")
+            return []
+    
+    def _get_manufacturer_rules(self) -> str:
+        """
+        Получить правила определения производителей из графа знаний.
+        
+        Returns:
+            Форматированная строка с правилами
+        """
+        try:
+            rules = []
+            parameter_patterns = self.knowledge_graph.get_parameter_patterns()
+            
+            # Добавляем основные правила определения производителей
+            basic_rules = [
+                "SDJCR/CNMG → Sandvik",
+                "YG/DH → YG-1", 
+                "KGM → KELITE",
+                "DCMT → ZCC",
+                "ER → EROGLU",
+                "HSK/BT → DAndrea",
+                "A0/A1 → JieHe"
+            ]
+            
+            for rule in basic_rules:
+                rules.append(f"- {rule}")
+            
+            # Добавляем дополнительные паттерны из графа знаний
+            for pattern, description in parameter_patterns.items():
+                if len(pattern) <= 10:  # Короткие паттерны для производителей
+                    rules.append(f"- {pattern} → {description}")
+            
+            return "\n".join(rules) if rules else "Правила недоступны"
+            
+        except Exception as e:
+            logger.warning(f"Ошибка получения правил производителей: {e}")
+            return "Правила недоступны"
     
     def _get_columns(self, mode: str) -> List[str]:
         """Получить список колонок для указанного режима."""
