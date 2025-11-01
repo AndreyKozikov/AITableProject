@@ -9,13 +9,13 @@ import json
 import torch
 import logging
 from datetime import datetime
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any, Optional, Union
 from pathlib import Path
 
 from transformers import AutoTokenizer, AutoModelForCausalLM
 from peft import PeftModel
 
-from src.utils.config import MODEL_CACHE_DIR
+from src.utils.config import MODEL_CACHE_DIR, LOAD_LORA_ADAPTERS
 from src.learning.knowledge_graph import knowledge_graph
 
 # Настройка логирования
@@ -76,15 +76,18 @@ class Qwen3CoTModel:
                 trust_remote_code=True
             )
             
-            # Загружаем LoRA адаптеры, если они существуют
-            adapters_path = Path(self.adapters_path)
-            if adapters_path.exists():
-                print(f"Загрузка LoRA адаптеров из: {adapters_path}")
-                self.model = PeftModel.from_pretrained(self.model, str(adapters_path))
-                print("✓ LoRA адаптеры загружены")
+            # Загрузка LoRA адаптеров по флагу конфигурации
+            if LOAD_LORA_ADAPTERS:
+                adapters_path = Path(self.adapters_path)
+                if adapters_path.exists():
+                    print(f"Загрузка LoRA адаптеров из: {adapters_path}")
+                    self.model = PeftModel.from_pretrained(self.model, str(adapters_path))
+                    print("✓ LoRA адаптеры загружены")
+                else:
+                    print(f"⚠ LoRA адаптеры не найдены в {adapters_path}")
+                    print("Используется базовая модель")
             else:
-                print(f"⚠ LoRA адаптеры не найдены в {adapters_path}")
-                print("Используется базовая модель")
+                print("⚠ Загрузка LoRA адаптеров отключена конфигурацией. Используется базовая модель")
             
             self.model = self.model.to(self.device)
             print("✓ Модель загружена успешно")
@@ -389,7 +392,7 @@ class Qwen3CoTModel:
   "type": "object"
 }'''
     
-    def ask_qwen3_cot(self, input_text: str, mode: str = "extended", max_length: int = 4096) -> Dict[str, Any]:
+    def ask_qwen3_cot(self, input_text: Union[str, List[str]], mode: str = "extended", max_length: int = 4096) -> Dict[str, Any]:
         """
         Обработать текст с использованием Chain-of-Thought reasoning.
         
@@ -401,9 +404,9 @@ class Qwen3CoTModel:
         Returns:
             Словарь с результатом обработки
         """
-        try:
+        def _infer_single(single_text: str, index: Optional[int] = None, total: Optional[int] = None) -> Dict[str, Any]:
             # Форматируем промпт с CoT
-            system_prompt, user_prompt = self.format_cot_prompt(input_text, mode)
+            system_prompt, user_prompt = self.format_cot_prompt(single_text, mode)
             
             # Формируем сообщения для чата
             messages = [
@@ -411,6 +414,12 @@ class Qwen3CoTModel:
                 {"role": "user", "content": user_prompt}
             ]
             
+            # Логируем входные данные, подаваемые в модель
+            if index is not None and total is not None:
+                logger.info(f"ВХОД В МОДЕЛЬ [chunk {index+1}/{total}]:\n{single_text}")
+            else:
+                logger.info(f"ВХОД В МОДЕЛЬ [single]:\n{single_text}")
+
             # Применяем chat template
             formatted_prompt = self.tokenizer.apply_chat_template(
                 messages,
@@ -449,36 +458,41 @@ class Qwen3CoTModel:
                 response = response[assistant_start + 9:].strip()
             
             # Логирование полного ответа модели
-            self._log_response(input_text, response, mode)
+            self._log_response(single_text, response, mode)
             
             # Парсим JSON ответ
             try:
                 parsed_json = json.loads(response)
                 logger.info(f"CoT model parsed JSON successfully")
-                
-                return {
-                    "success": True,
-                    "result": parsed_json,
-                    "raw_response": response
-                }
+                return {"success": True, "result": parsed_json, "raw_response": response}
             except json.JSONDecodeError as e:
                 logger.error(f"Failed to parse JSON response: {e}")
                 logger.error(f"Raw response: {response}")
-                
-                return {
-                    "success": False,
-                    "error": f"Invalid JSON response: {str(e)}",
-                    "raw_response": response
-                }
-                
+                return {"success": False, "error": f"Invalid JSON response: {str(e)}", "raw_response": response}
+
+        try:
+            # Обработка батча: список строк или одна строка
+            if isinstance(input_text, list):
+                combined_rows: List[Dict[str, Any]] = []
+                raw_responses: List[str] = []
+                total = len(input_text)
+                logger.info(f"РЕЖИМ СПИСКА: получено {total} чанков, обрабатываем все")
+                for idx, chunk in enumerate(input_text):
+                    result = _infer_single(chunk, index=idx, total=total)
+                    raw_responses.append(result.get("raw_response", ""))
+                    if result.get("success") and isinstance(result.get("result"), dict):
+                        rows = result["result"].get("rows", [])
+                        if isinstance(rows, list):
+                            combined_rows.extend(rows)
+                return {"success": True, "result": {"rows": combined_rows}, "raw_response": "\n".join(raw_responses)}
+
+            # Одиночный вызов
+            return _infer_single(input_text)
+            
         except Exception as e:
             error_msg = f"Ошибка обработки: {str(e)}"
             logger.error(error_msg)
-            return {
-                "success": False,
-                "error": error_msg,
-                "raw_response": ""
-            }
+            return {"success": False, "error": error_msg, "raw_response": ""}
     
     def _log_response(self, input_text: str, response: str, mode: str):
         """

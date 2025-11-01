@@ -74,8 +74,9 @@ def ask_qwen3(prompt: Optional[str] = None, max_new_tokens: int = 2048) -> str:
         logger.warning("Пустой промпт предоставлен в Qwen3")
         return ""
     
-    logger.info(f"Начало инференса Qwen3 с длиной промпта: {len(prompt)}")
-    logger.debug(f"Превью промпта: {prompt[:200]}...")
+    logger.info(f"Начало инференса Qwen3. Тип входа: single. Длина: {len(prompt)}")
+    logger.info("ВХОДНЫЕ ДАННЫЕ ДЛЯ МОДЕЛИ (single):")
+    logger.info(f"{prompt}")
     
     try:
         load_model()
@@ -90,6 +91,8 @@ def ask_qwen3(prompt: Optional[str] = None, max_new_tokens: int = 2048) -> str:
                 "content": prompt
             }
         ]
+        logger.info("Количество сообщений, передаваемых в шаблон: %d", len(messages))
+        logger.info("Длина user-сообщения: %d", len(prompt))
         
         logger.info("Подготовка входных данных модели...")
         text = tokenizer.apply_chat_template(

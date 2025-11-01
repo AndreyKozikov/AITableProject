@@ -17,7 +17,7 @@ Based on: https://www.dataleadsfuture.com/build-autogen-agents-with-qwen3-struct
 """
 
 from pathlib import Path
-from typing import Optional, List, Type
+from typing import Optional, List, Type, Union
 import re
 
 import pandas as pd
@@ -256,7 +256,7 @@ def load_model() -> None:
 
 
 def ask_qwen3_structured(
-    prompt: Optional[str] = None,
+    prompt: Optional[Union[str, List[str]]] = None,
     extended: bool = False,
     max_new_tokens: int = 2048,
     enable_thinking: bool = False
@@ -282,75 +282,56 @@ def ask_qwen3_structured(
     Raises:
         Exception: If model inference or validation fails.
     """
-    if not prompt:
-        # Возвращаем пустую структуру
-        _, container_model = get_table_models(extended=extended)
-        return container_model(rows=[])
-    
-    try:
+    # Вспомогательная функция для одного чанка
+    def _infer_single(single_prompt: str, index: Optional[int] = None, total: Optional[int] = None) -> BaseModel:
         load_model()
-        
-        # Получаем динамически созданные модели из CSV схемы
         row_model, container_model = get_table_models(extended=extended)
-        
-        # Получаем JSON схему для промпта
         json_schema = container_model.model_json_schema()
-        
 
-        # Получаем список колонок для header
         if extended:
             csv_path = MODEL_DIR / "extended.csv"
         else:
             csv_path = MODEL_DIR / "simplified.csv"
-        
+
         columns = _load_csv_schema(csv_path)
         header_str = ", ".join(columns)
-        
-        # Определяем режим работы
         mode = "extended" if extended else "simplified"
-        
-        # Формируем system prompt используя PROMPT_TEMPLATE_SO из конфига
+
         system_content = PROMPT_TEMPLATE_SO.format(
             header=header_str,
             schema=json_schema,
-            tables_text="{tables_text}"  # Placeholder, будет заменен в user message
+            tables_text="{tables_text}"
         )
-        
-        # User message содержит только данные
-        system_content_clean = system_content.replace("{tables_text}", "")  # Убираем placeholder из system
-        
-        # Добавляем режим работы в system prompt (как при обучении)
+        system_content_clean = system_content.replace("{tables_text}", "")
         system_message_content = f"Режим работы: {mode}. {system_content_clean}"
-        
+
+        # Логируем входные данные, подаваемые в модель
+        if index is not None and total is not None:
+            logger.info(f"ВХОД В МОДЕЛЬ [chunk {index+1}/{total}]:\n{single_prompt}")
+        else:
+            logger.info(f"ВХОД В МОДЕЛЬ [single]:\n{single_prompt}")
+
         messages = [
-            {
-                "role": "system",
-                "content": system_message_content
-            },
-            {
-                "role": "user", 
-                "content": prompt
-            }
+            {"role": "system", "content": system_message_content},
+            {"role": "user", "content": single_prompt}
         ]
-        
-        # Применяем chat template с параметром enable_thinking
+
         text = tokenizer.apply_chat_template(
             messages,
             tokenize=False,
             add_generation_prompt=True,
             enable_thinking=enable_thinking
         )
-        
-        # Логируем финальный промпт
+
         logger.info(f"\n{'='*60}")
         logger.info("ФИНАЛЬНЫЙ ПРОМПТ:")
         logger.info(f"{'='*60}")
         logger.info(f"{text}")
         logger.info(f"{'='*60}\n")
-        
+
         model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
         eos_token_id = tokenizer.eos_token_id
-        
+
         generated_ids = model.generate(
             **model_inputs,
             max_new_tokens=max_new_tokens,
@@ -360,21 +341,17 @@ def ask_qwen3_structured(
             temperature=0.1,
             top_p=0.9
         )
-        
+
         output_ids = generated_ids[0][len(model_inputs.input_ids[0]):].tolist()
         output_text = tokenizer.decode(output_ids, skip_special_tokens=True)
-        
-        # Логируем ответ модели
+
         logger.info(f"\n{'='*60}")
         logger.info("ОТВЕТ МОДЕЛИ:")
         logger.info(f"{'='*60}")
         logger.info(f"{output_text}")
         logger.info(f"{'='*60}\n")
-        
-        # Очистка вывода от возможного Markdown синтаксиса
+
         output_text_clean = output_text.strip()
-        
-        # Если вывод обернут в ```json или ``` блок
         if output_text_clean.startswith("```"):
             lines = output_text_clean.split("\n")
             json_lines = []
@@ -389,26 +366,34 @@ def ask_qwen3_structured(
                 if in_json:
                     json_lines.append(line)
             output_text_clean = "\n".join(json_lines)
-        
-        
-        # Валидация через model_validate_json
-        structured_result = container_model.model_validate_json(output_text_clean)
-        
-        # Логируем финальный обработанный результат
-        logger.info(f"\n{'='*60}")
-        logger.info("ФИНАЛЬНЫЙ РЕЗУЛЬТАТ:")
-        logger.info(f"{'='*60}")
-        logger.info(f"Количество строк: {len(structured_result.rows)}")
-        for i, row in enumerate(structured_result.rows, 1):
-            logger.info(f"Строка {i}: {row.model_dump(by_alias=True)}")
-        logger.info(f"{'='*60}\n")
-        
-        return structured_result
-        
+
+        return container_model.model_validate_json(output_text_clean)
+
+    # Обработка входа: строка или список строк
+    if prompt is None:
+        _, container_model = get_table_models(extended=extended)
+        return container_model(rows=[])
+
+    if isinstance(prompt, list):
+        # Объединяем результаты для всех переданных чанков
+        _, container_model = get_table_models(extended=extended)
+        combined_rows = []
+        total = len(prompt)
+        logger.info(f"РЕЖИМ СПИСКА: получено {total} чанков, обрабатываем все")
+        for idx, chunk in enumerate(prompt):
+            try:
+                result = _infer_single(chunk, index=idx, total=total)
+                combined_rows.extend(result.rows)
+            except Exception as e:
+                logger.error(f"Ошибка обработки чанка {idx}: {e}")
+                continue
+        return container_model(rows=combined_rows)
+
+    # Одиночный промпт
+    try:
+        return _infer_single(prompt)
     except Exception as e:
         logger.error(f"Ошибка обработки: {e}")
-        if 'output_text' in locals():
-            logger.error(f"Проблемный вывод: {output_text}")
         raise
 
 

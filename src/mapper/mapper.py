@@ -18,7 +18,7 @@ from src.mapper.ask_qwen3 import ask_qwen3
 from src.mapper.ask_llama2 import ask_llama2
 from src.mapper.ask_qwen3_so import ask_qwen3_structured, extract_rows_as_dicts
 from src.mapper.ask_qwen3_cot import ask_qwen3_cot, extract_cot_rows_as_dicts
-from src.utils.config import MODEL_DIR, PARSING_DIR, PROMPT_TEMPLATE, PROMPT_TEMPLATE_SO
+from src.utils.config import MODEL_DIR, PARSING_DIR, PROMPT_TEMPLATE, PROMPT_TEMPLATE_SO, MAPPING_CHUNK_SIZE
 
 # Настройка логирования
 logger = logging.getLogger(__name__)
@@ -79,7 +79,7 @@ def mapper_structured(
     """
     max_new_tokens = 4000
     all_rows = []
-    chunk_size = 1
+    chunk_size = MAPPING_CHUNK_SIZE
     
     if extended:
         logger.info("Starting mapper_structured in extended mode")
