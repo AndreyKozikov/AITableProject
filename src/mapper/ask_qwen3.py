@@ -99,7 +99,7 @@ def ask_qwen3(prompt: Optional[str] = None, max_new_tokens: int = 2048) -> str:
             messages,
             tokenize=False,
             add_generation_prompt=True,
-            enable_thinking=False  # Switches between thinking and non-thinking modes
+            enable_thinking=False  # Отключаем режим думания/рассуждений
         )
         
         model_inputs = tokenizer([text], return_tensors="pt").to(model.device)

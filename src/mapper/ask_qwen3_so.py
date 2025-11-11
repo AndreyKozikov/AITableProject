@@ -259,7 +259,7 @@ def ask_qwen3_structured(
     prompt: Optional[Union[str, List[str]]] = None,
     extended: bool = False,
     max_new_tokens: int = 2048,
-    enable_thinking: bool = False
+    enable_thinking: bool = False  # По умолчанию отключён режим думания
 ) -> BaseModel:
     """Query Qwen3 model with structured output.
     
@@ -274,7 +274,9 @@ def ask_qwen3_structured(
         prompt: Text prompt for the model.
         extended: Use extended table schema (6 columns) if True, simplified (4 columns) if False.
         max_new_tokens: Maximum number of tokens to generate.
-        enable_thinking: Enable thinking mode (Chain of Thought reasoning).
+        enable_thinking: Enable thinking mode (Chain of Thought reasoning). 
+                        Рекомендуется False для более быстрой и прямой генерации.
+                        True включает режим рассуждений <think>...</think>.
         
     Returns:
         Structured output model with validated data.

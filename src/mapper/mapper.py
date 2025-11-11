@@ -13,11 +13,10 @@ from typing import Any, Dict, Generator, List, Tuple, Union
 
 import pandas as pd
 
-from src.mapper.ask_qwen2 import ask_qwen2
 from src.mapper.ask_qwen3 import ask_qwen3
-from src.mapper.ask_llama2 import ask_llama2
 from src.mapper.ask_qwen3_so import ask_qwen3_structured, extract_rows_as_dicts
 from src.mapper.ask_qwen3_cot import ask_qwen3_cot, extract_cot_rows_as_dicts
+from src.mapper.ask_qwen_gguf import ask_qwen_gguf, extract_cot_rows_as_dicts as extract_gguf_rows
 from src.utils.config import MODEL_DIR, PARSING_DIR, PROMPT_TEMPLATE, PROMPT_TEMPLATE_SO, MAPPING_CHUNK_SIZE
 
 # Настройка логирования
@@ -60,8 +59,9 @@ def chunk_data(data: List[Any], chunk_size: int = 20) -> Generator[List[Any], No
 def mapper_structured(
     files: List[Union[str, Path]], 
     extended: bool = False,
-    enable_thinking: bool = False,
-    use_cot: bool = False
+    enable_thinking: bool = False,  # По умолчанию отключён режим думания
+    use_cot: bool = False,
+    use_gguf: bool = False
 ) -> List[Dict[str, str]]:
     """Main data mapping function with structured output.
     
@@ -71,8 +71,11 @@ def mapper_structured(
     Args:
         files: List of JSON files to process.
         extended: Extended processing mode flag.
-        enable_thinking: Enable Chain of Thought reasoning.
+        enable_thinking: Enable thinking mode (Chain of Thought reasoning).
+                        Рекомендуется False для более быстрой генерации.
+                        True включает режим рассуждений <think>...</think> в Qwen3.
         use_cot: Использовать модель с Chain-of-Thought reasoning.
+        use_gguf: Использовать GGUF модель через llama-cpp-python.
         
     Returns:
         Tuple of (all_rows, headers) where all_rows is list of dicts.
@@ -133,8 +136,29 @@ def mapper_structured(
                 # Log prompt info
                 logger.info(f"Prompt length: {len(tables_text)} characters")
                 
-                # Send to Qwen3 structured output model
-                if use_cot:
+                # Send to model
+                if use_gguf:
+                    logger.info(f"Sending chunk {chunk_count} to Qwen GGUF model...")
+                    gguf_response = ask_qwen_gguf(
+                        prompt=tables_text,
+                        extended=extended,
+                        max_new_tokens=max_new_tokens
+                    )
+                    
+                    logger.info(f"GGUF model response length: {len(gguf_response)}")
+                    
+                    # Извлекаем строки из ответа
+                    rows = extract_gguf_rows(gguf_response)
+                    logger.info(f"Extracted {len(rows)} rows from GGUF response")
+                    
+                    # Создаем совместимый результат
+                    class SimpleResult:
+                        def __init__(self, rows_data):
+                            self.rows = rows_data
+                    
+                    structured_result = SimpleResult(rows) if rows else {}
+                    
+                elif use_cot:
                     logger.info(f"Sending chunk {chunk_count} to Qwen3 CoT model...")
                     mode = "extended" if extended else "simplified"
                     cot_result = ask_qwen3_cot(tables_text, mode=mode)
