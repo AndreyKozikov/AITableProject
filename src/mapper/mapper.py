@@ -13,10 +13,8 @@ from typing import Any, Dict, Generator, List, Tuple, Union
 
 import pandas as pd
 
-from src.mapper.ask_qwen3 import ask_qwen3
-from src.mapper.ask_qwen3_so import ask_qwen3_structured, extract_rows_as_dicts
 from src.mapper.ask_qwen3_cot import ask_qwen3_cot, extract_cot_rows_as_dicts
-from src.mapper.ask_qwen_gguf import ask_qwen_gguf, extract_cot_rows_as_dicts as extract_gguf_rows
+from src.mapper.ask_openai_cot import ask_openai_cot as ask_openai_cot_func, extract_cot_rows_as_dicts as extract_openai_cot_rows
 from src.utils.config import MODEL_DIR, PARSING_DIR, PROMPT_TEMPLATE, PROMPT_TEMPLATE_SO, MAPPING_CHUNK_SIZE
 
 # Настройка логирования
@@ -61,7 +59,7 @@ def mapper_structured(
     extended: bool = False,
     enable_thinking: bool = False,  # По умолчанию отключён режим думания
     use_cot: bool = False,
-    use_gguf: bool = False
+    remote_model: bool = False
 ) -> List[Dict[str, str]]:
     """Main data mapping function with structured output.
     
@@ -74,8 +72,8 @@ def mapper_structured(
         enable_thinking: Enable thinking mode (Chain of Thought reasoning).
                         Рекомендуется False для более быстрой генерации.
                         True включает режим рассуждений <think>...</think> в Qwen3.
-        use_cot: Использовать модель с Chain-of-Thought reasoning.
-        use_gguf: Использовать GGUF модель через llama-cpp-python.
+        use_cot: Использовать модель с Chain-of-Thought reasoning (всегда True для локальной модели).
+        remote_model: Использовать удаленную модель OpenAI вместо локальной.
         
     Returns:
         Tuple of (all_rows, headers) where all_rows is list of dicts.
@@ -136,63 +134,37 @@ def mapper_structured(
                 # Log prompt info
                 logger.info(f"Prompt length: {len(tables_text)} characters")
                 
-                # Send to model
-                if use_gguf:
-                    logger.info(f"Sending chunk {chunk_count} to Qwen GGUF model...")
-                    gguf_response = ask_qwen_gguf(
-                        prompt=tables_text,
-                        extended=extended,
-                        max_new_tokens=max_new_tokens
-                    )
-                    
-                    logger.info(f"GGUF model response length: {len(gguf_response)}")
-                    
-                    # Извлекаем строки из ответа
-                    rows = extract_gguf_rows(gguf_response)
-                    logger.info(f"Extracted {len(rows)} rows from GGUF response")
-                    
-                    # Создаем совместимый результат
+                # Send to model (use OpenAI CoT for remote, Qwen3 CoT for local)
+                mode = "extended" if extended else "simplified"
+                if remote_model:
+                    logger.info(f"Sending chunk {chunk_count} to OpenAI CoT model...")
+                    cot_result = ask_openai_cot_func(tables_text, mode=mode)
+                else:
+                    logger.info(f"Sending chunk {chunk_count} to Qwen3 CoT model...")
+                    cot_result = ask_qwen3_cot(tables_text, mode=mode)
+                
+                logger.info(f"CoT model returned success={cot_result.get('success')}")
+                logger.info(f"CoT raw response:\n{cot_result.get('raw_response', '')}")
+                
+                # Для тестирования принимаем любой результат
+                structured_result = cot_result.get("result", {})
+                
+                # Создаем объект совместимый с extract_rows_as_dicts
+                if structured_result and "rows" in structured_result:
                     class SimpleResult:
                         def __init__(self, rows_data):
                             self.rows = rows_data
                     
-                    structured_result = SimpleResult(rows) if rows else {}
-                    
-                elif use_cot:
-                    logger.info(f"Sending chunk {chunk_count} to Qwen3 CoT model...")
-                    mode = "extended" if extended else "simplified"
-                    cot_result = ask_qwen3_cot(tables_text, mode=mode)
-                    
-                    logger.info(f"CoT model returned success={cot_result.get('success')}")
-                    logger.info(f"CoT raw response:\n{cot_result.get('raw_response', '')}")
-                    
-                    # Для тестирования принимаем любой результат
-                    structured_result = cot_result.get("result", {})
-                    
-                    # Создаем объект совместимый с extract_rows_as_dicts
-                    if structured_result and "rows" in structured_result:
-                        class SimpleResult:
-                            def __init__(self, rows_data):
-                                self.rows = rows_data
-                        
-                        structured_result = SimpleResult(structured_result["rows"])
-                    
-                    if cot_result.get("reasoning"):
-                        logger.info(f"CoT reasoning:\n{cot_result['reasoning']}")
-                    
-                    # Не используем fallback для тестирования
-                    if not cot_result.get("success"):
-                        logger.warning(f"CoT model error: {cot_result.get('error')}")
-                        # Возвращаем пустой результат для анализа
-                        structured_result = {}
-                else:
-                    logger.info(f"Sending chunk {chunk_count} to Qwen3 structured model...")
-                    structured_result = ask_qwen3_structured(
-                        prompt=tables_text,
-                        extended=extended,
-                        max_new_tokens=max_new_tokens,
-                        enable_thinking=enable_thinking
-                    )
+                    structured_result = SimpleResult(structured_result["rows"])
+                
+                if cot_result.get("reasoning"):
+                    logger.info(f"CoT reasoning:\n{cot_result['reasoning']}")
+                
+                # Не используем fallback для тестирования
+                if not cot_result.get("success"):
+                    logger.warning(f"CoT model error: {cot_result.get('error')}")
+                    # Возвращаем пустой результат для анализа
+                    structured_result = {}
                 
                 # Log structured result info
                 if structured_result:
@@ -203,10 +175,10 @@ def mapper_structured(
                     logger.warning(f"Empty structured response from model for chunk {chunk_count}")
                 
                 # Extract rows as dictionaries with Russian field names
-                if use_cot:
-                    chunk_rows = extract_cot_rows_as_dicts(cot_result, use_aliases=True)
+                if remote_model:
+                    chunk_rows = extract_openai_cot_rows(cot_result, use_aliases=True)
                 else:
-                    chunk_rows = extract_rows_as_dicts(structured_result, use_aliases=True)
+                    chunk_rows = extract_cot_rows_as_dicts(cot_result, use_aliases=True)
                 
                 logger.info(f"Received {len(chunk_rows)} structured rows from chunk {chunk_count}")
                 if chunk_rows:

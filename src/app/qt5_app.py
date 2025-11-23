@@ -37,13 +37,12 @@ class FileProcessingThread(QThread):
     finished = pyqtSignal(object)  # result_path
     error = pyqtSignal(str)  # error_message
     
-    def __init__(self, files: List[Path], extended: bool, remote_model: bool, use_cot: bool, use_gguf: bool = False):
+    def __init__(self, files: List[Path], extended: bool, remote_model: bool, use_cot: bool):
         super().__init__()
         self.files = files
         self.extended = extended
         self.remote_model = remote_model
         self.use_cot = use_cot
-        self.use_gguf = use_gguf
     
     def run(self):
         """Выполняет обработку файлов в фоновом потоке."""
@@ -55,8 +54,7 @@ class FileProcessingThread(QThread):
                 self.files,
                 extended=self.extended,
                 remote_model=self.remote_model,
-                use_cot=self.use_cot,
-                use_gguf=self.use_gguf
+                use_cot=self.use_cot
             )
             
             self.progress.emit(3, 3, "Обработка завершена")
@@ -403,12 +401,10 @@ class MainWindow(QMainWindow):
         
         self.model_combo = QComboBox()
         self.model_combo.addItems([
-            "Локальная модель Qwen 3",
             "Локальная модель Qwen 3 + CoT",
-            "Локальная модель Qwen GGUF",
             "Облачная модель ChatGPT"
         ])
-        self.model_combo.setToolTip("CoT (Chain-of-Thought) - модель с цепочками рассуждений для лучшей точности\nGGUF - квантованная модель для быстрого инференса")
+        self.model_combo.setToolTip("CoT (Chain-of-Thought) - модель с цепочками рассуждений для лучшей точности")
         settings_layout.addWidget(self.model_combo)
         
         # Режим обработки
@@ -619,10 +615,9 @@ class MainWindow(QMainWindow):
         model_choice = self.model_combo.currentText()
         remote_model = model_choice == "Облачная модель ChatGPT"
         use_cot = model_choice == "Локальная модель Qwen 3 + CoT"
-        use_gguf = model_choice == "Локальная модель Qwen GGUF"
         extended = self.smart_mode_radio.isChecked()
         
-        logger.info(f"Начинаем обработку: extended={extended}, remote={remote_model}, cot={use_cot}, gguf={use_gguf}")
+        logger.info(f"Начинаем обработку: extended={extended}, remote={remote_model}, cot={use_cot}")
         
         # Отключаем кнопку и показываем прогресс
         self.process_button.setEnabled(False)
@@ -638,8 +633,7 @@ class MainWindow(QMainWindow):
             self.saved_files,
             extended,
             remote_model,
-            use_cot,
-            use_gguf
+            use_cot
         )
         
         self.processing_thread.progress.connect(self.update_progress)

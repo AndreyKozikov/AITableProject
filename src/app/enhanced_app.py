@@ -7,9 +7,17 @@ from pathlib import Path
 import re
 import hashlib
 from datetime import datetime
+import sys
+
+# Настройка централизованного логирования в самом начале
+from src.utils.logging_config import configure_logging, get_logger
+from src.utils.config import INBOX_DIR, PARSING_DIR
+
+# Инициализация логирования из config/logging_config.json
+configure_logging()
+logger = get_logger(__name__)
 
 # Import existing utilities
-from src.utils.config import INBOX_DIR
 from src.utils.process_files import process_files
 
 # Import template loader
@@ -297,7 +305,7 @@ def _render_processing_settings():
         st.markdown("**🤖 Модель ИИ**")
         model_choice = st.selectbox(
             "Выберите модель",
-            ["Локальная модель Qwen 3", "Локальная модель Qwen 3 + CoT", "Облачная модель ChatGPT"],
+            ["Локальная модель Qwen 3 + CoT", "Облачная модель ChatGPT"],
             help="CoT (Chain-of-Thought) - модель с цепочками рассуждений для лучшей точности",
             label_visibility="collapsed",
         )
@@ -355,8 +363,74 @@ def _render_processing_settings():
         st.info("👆 Загрузите файлы для начала обработки")
 
 
+def clean_directories() -> None:
+    """Очистка всех файлов из директорий inbox и parsing.
+    
+    Удаляет все файлы из INBOX_DIR и PARSING_DIR для подготовки
+    к новой сессии обработки.
+    """
+    try:
+        # Очистка директории inbox
+        if INBOX_DIR.exists():
+            deleted_count = 0
+            for file_path in INBOX_DIR.iterdir():
+                if file_path.is_file():
+                    try:
+                        file_path.unlink()
+                        deleted_count += 1
+                        logger.debug(f"Удален из inbox: {file_path.name}")
+                    except Exception as e:
+                        logger.warning(f"Не удалось удалить {file_path.name}: {e}")
+            
+            if deleted_count > 0:
+                logger.info(f"Очищена директория inbox: удалено {deleted_count} файлов")
+            else:
+                logger.debug("Директория inbox пуста")
+        else:
+            logger.warning(f"Директория inbox не существует: {INBOX_DIR}")
+        
+        # Очистка директории parsing_files
+        if PARSING_DIR.exists():
+            deleted_count = 0
+            for file_path in PARSING_DIR.iterdir():
+                if file_path.is_file():
+                    try:
+                        file_path.unlink()
+                        deleted_count += 1
+                        logger.debug(f"Удален из parsing_files: {file_path.name}")
+                    except Exception as e:
+                        logger.warning(f"Не удалось удалить {file_path.name}: {e}")
+            
+            if deleted_count > 0:
+                logger.info(f"Очищена директория parsing_files: удалено {deleted_count} файлов")
+            else:
+                logger.debug("Директория parsing_files пуста")
+        else:
+            logger.warning(f"Директория parsing не существует: {PARSING_DIR}")
+            
+    except Exception as e:
+        logger.error(f"Ошибка при очистке директорий: {e}")
+
+
 def main():
     """Главная точка входа в приложение."""
+    # Инициализация при первом запуске
+    if 'initialized' not in st.session_state:
+        logger.info("Запуск Streamlit приложения AITableProject...")
+        
+        # Очистка директорий перед запуском
+        logger.info("Очистка директорий...")
+        clean_directories()
+        
+        # Добавление пути src в Python path
+        src_path = Path(__file__).parent.parent
+        if str(src_path) not in sys.path:
+            sys.path.insert(0, str(src_path))
+            logger.info(f"Добавлено в sys.path: {src_path}")
+        
+        st.session_state.initialized = True
+        logger.info("Streamlit приложение инициализировано успешно")
+    
     # Загружаем пользовательские стили
     load_custom_css()
     

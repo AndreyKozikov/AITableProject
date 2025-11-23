@@ -4,9 +4,6 @@
 # PyQt5 - GUI фреймворк
 PyQt5>=5.15.0
 
-# llama-cpp-python - для работы с GGUF моделями
-llama-cpp-python>=0.2.0
-
 # Дополнительные инструменты PyQt5 (опционально)
 # PyQt5-tools>=5.15.0  # Для Qt Designer и других инструментов разработки
 

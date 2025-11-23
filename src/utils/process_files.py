@@ -17,7 +17,6 @@ from src.parsers.pdf_parser import parse_pdf
 from src.parsers.txt_parser import load_txt_file
 import src.parsers.docx_parser
 import src.parsers.excel_parser
-import src.parsers.openai_parser
 
 from src.utils.config import OUT_DIR, PARSING_DIR
 from src.utils.logging_config import get_logger
@@ -121,8 +120,7 @@ def save_to_xlsx(rows: List[dict]) -> Path:
 def process_files(files: List[Path], 
                  extended: bool = False, 
                  remote_model: bool = False,
-                 use_cot: bool = False,
-                 use_gguf: bool = False) -> Optional[Path]:
+                 use_cot: bool = False) -> Optional[Path]:
     """Главная функция обработки файлов.
     
     Args:
@@ -130,40 +128,30 @@ def process_files(files: List[Path],
         extended: Флаг расширенной обработки.
         remote_model: Флаг использования удаленной AI модели.
         use_cot: Флаг использования модели с Chain-of-Thought reasoning.
-        use_gguf: Флаг использования GGUF модели через llama-cpp-python.
         
     Returns:
         Путь к созданному файлу результата или None.
     """
     logger.info(f"Начинаем обработку {len(files)} файлов")
-    logger.info(f"Расширенный режим: {extended}, Удаленная модель: {remote_model}, CoT: {use_cot}, GGUF: {use_gguf}")
+    logger.info(f"Расширенный режим: {extended}, Удаленная модель: {remote_model}, CoT: {use_cot}")
     
     try:
-        if remote_model:
-            logger.info("Используем удаленную модель OpenAI для обработки")
-            handler = PARSERS.get("openai")
-            if not handler:
-                logger.error("Парсер OpenAI не найден в реестре")
-                return None
-            rows, header = handler([str(f) for f in files])
-            logger.info("Обработка удаленной моделью завершена")
-        else:
-            logger.info("Используем локальный конвейер обработки")
-            files_list_csv = parsing_files(files)
-            if not files_list_csv:
-                logger.warning("Нет обработанных файлов для маппинга")
-                return None
-                
-            rows = mapper_structured(
-                        files=files_list_csv,
-                        extended=extended,
-                        enable_thinking=False,
-                        use_cot=use_cot,
-                        use_gguf=use_gguf
-                    )
+        # Всегда используем единый конвейер обработки через mapper_structured
+        logger.info("Используем конвейер обработки")
+        files_list_csv = parsing_files(files)
+        if not files_list_csv:
+            logger.warning("Нет обработанных файлов для маппинга")
+            return None
+            
+        rows = mapper_structured(
+                    files=files_list_csv,
+                    extended=extended,
+                    enable_thinking=False,
+                    use_cot=use_cot,
+                    remote_model=remote_model
+                )
 
-
-            logger.info("Локальная обработка завершена")
+        logger.info("Обработка завершена")
         
         file_path = save_to_xlsx(rows)
         if file_path:

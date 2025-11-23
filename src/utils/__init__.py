@@ -8,8 +8,4 @@ for _mod in ("parsers.tesseract_img",):
     except ModuleNotFoundError:
         pass
 
-# # Экспорт модуля постобработки OCR
-# from tmp.ocr_postprocessor import OCRPostProcessor
-#
-# __all__ = ['OCRPostProcessor']
 

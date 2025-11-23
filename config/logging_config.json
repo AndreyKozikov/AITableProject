@@ -118,22 +118,12 @@
             "handlers": ["console", "file_rotating", "file_daily"],
             "propagate": false
         },
-        "src.mapper.ask_qwen3": {
-            "level": "INFO",
-            "handlers": ["console", "file_rotating", "file_daily"],
-            "propagate": false
-        },
-        "src.mapper.ask_qwen3_so": {
-            "level": "INFO",
-            "handlers": ["console", "file_rotating", "file_daily"],
-            "propagate": false
-        },
         "src.mapper.ask_qwen3_cot": {
             "level": "DEBUG",
             "handlers": ["console", "file_rotating", "file_daily", "cot_file"],
             "propagate": false
         },
-        "src.mapper.ask_qwen_gguf": {
+        "src.mapper.ask_openai_cot": {
             "level": "INFO",
             "handlers": ["console", "file_rotating", "file_daily"],
             "propagate": false
