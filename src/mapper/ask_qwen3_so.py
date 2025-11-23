@@ -331,7 +331,7 @@ def ask_qwen3_structured(
         logger.info(f"{text}")
         logger.info(f"{'='*60}\n")
 
-        model_inputs = tokenizer([text], return_tensors="pt").to(model.device)
+        model_inputs = tokenizer([text], return_tensors="pt").to(DEVICE)
         eos_token_id = tokenizer.eos_token_id
 
         generated_ids = model.generate(
